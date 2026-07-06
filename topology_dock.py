@@ -29,7 +29,6 @@ from qgis.PyQt.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -44,6 +43,7 @@ from qgis.core import (
     QgsMapLayerProxyModel,
     QgsProject,
     QgsRectangle,
+    QgsUnitTypes,
 )
 from qgis.gui import QgsDockWidget, QgsMapLayerComboBox
 
@@ -66,11 +66,12 @@ GEOM_ROLE = Qt.UserRole + 1
 #   น้ำเงิน #007bff | แดง #dc3545 | เทา #6c757d
 #   พื้นอ่อน #f8f9fa | ตัวหนังสือ #333 | ขอบ #ced4da
 # ==================================================================
+# ขนาด/สไตล์อ้างอิงตามปุ่ม "อัปเดตปลั๊กอิน" ของ Filter_PATH:
+#   font-size 10pt, ตัวหนา, padding 6px, border-radius 4px
 _BTN_BASE = (
     "QPushButton {{"
     " background-color: {bg}; color: white; border: none;"
-    " border-radius: 6px; padding: 9px 16px; font-size: 11pt; font-weight: bold;"
-    " min-height: 20px; }}"
+    " border-radius: 4px; padding: 6px; font-size: 10pt; font-weight: bold; }}"
     "QPushButton:hover:enabled {{ background-color: {hover}; }}"
     "QPushButton:pressed:enabled {{ background-color: {pressed}; }}"
     "QPushButton:disabled {{ background-color: #ced4da; color: #f1f3f5; }}"
@@ -87,81 +88,75 @@ BTN_GRAY = _BTN_BASE.format(bg="#6c757d", hover="#828a91", pressed="#5a6268")
 BTN_OUTLINE = (
     "QPushButton {"
     " background-color: #ffffff; color: #dc3545;"
-    " border: 1px solid #dc3545; border-radius: 6px;"
-    " padding: 9px 16px; font-size: 11pt; font-weight: bold; min-height: 20px; }"
+    " border: 1px solid #dc3545; border-radius: 4px;"
+    " padding: 6px; font-size: 10pt; font-weight: bold; }"
     "QPushButton:hover:enabled { background-color: #fdeaec; }"
     "QPushButton:pressed:enabled { background-color: #f8d7da; }"
     "QPushButton:disabled { color: #ced4da; border-color: #e9ecef; background-color: #ffffff; }"
 )
 
-# สไตล์รวมของหน้าต่าง — ธีมสว่างแบบ modern (ให้หน้าตาเหมือนกันทุกธีม QGIS)
+# สไตล์รวมของหน้าต่าง — โทน/ขนาดฟอนต์อ้างอิงตาม Filter_PATH (Bootstrap)
+#   QLabel 10pt ตัวหนา #333 | QComboBox 10pt (ลูกศร ▼ แบบ native) | ช่องกรอก 11pt
 DOCK_QSS = """
-#ntcContainer, QScrollArea { background-color: #f8f9fa; }
-#ntcContainer { font-family: "Segoe UI", "Tahoma", sans-serif; }
+#ntcContainer { background-color: #f8f9fa; }
 
-QLabel { font-size: 10pt; color: #343a40; }
+QLabel { font-size: 10pt; font-weight: bold; color: #333; }
 
 QGroupBox {
-    font-size: 10.5pt;
+    font-size: 10pt;
     font-weight: bold;
     color: #2c3e50;
     background-color: #ffffff;
     border: 1px solid #e3e6ea;
-    border-radius: 10px;
-    margin-top: 16px;
-    padding: 12px 10px 10px 10px;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 10px 8px 8px 8px;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 12px;
-    padding: 2px 10px;
+    left: 10px;
+    padding: 2px 8px;
     color: #007bff;
 }
 
-QComboBox, QDoubleSpinBox {
-    font-size: 11pt;
-    color: #343a40;
+QComboBox {
+    font-size: 10pt;
+    color: #333;
     background-color: #ffffff;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    padding: 6px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 3px 6px;
     min-height: 24px;
 }
-QComboBox:hover, QDoubleSpinBox:hover { border: 1px solid #86b7fe; }
-QComboBox:focus, QDoubleSpinBox:focus { border: 1px solid #007bff; }
-QComboBox::drop-down {
-    border: none;
-    width: 26px;
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-}
-QComboBox::down-arrow {
-    image: none;
-    width: 0; height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 7px solid #6c757d;
-    margin-right: 10px;
-}
+QComboBox:focus { border: 1px solid #007bff; }
 QComboBox QAbstractItemView {
     background-color: #ffffff;
-    color: #343a40;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    outline: none;
+    color: #333;
+    border: 1px solid #ccc;
     selection-background-color: #007bff;
     selection-color: #ffffff;
 }
 
-QCheckBox, QRadioButton { font-size: 10.5pt; color: #343a40; spacing: 8px; padding: 3px 0; }
+QDoubleSpinBox {
+    font-size: 11pt;
+    color: #333;
+    background-color: #ffffff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-height: 22px;
+}
+QDoubleSpinBox:focus { border: 1px solid #007bff; }
+
+QCheckBox, QRadioButton { font-size: 10pt; font-weight: bold; color: #333; spacing: 7px; padding: 2px 0; }
 
 QTableWidget {
     font-size: 10pt;
     background-color: #ffffff;
-    color: #343a40;
+    color: #333;
     border: 1px solid #e3e6ea;
-    border-radius: 8px;
+    border-radius: 6px;
     gridline-color: #eef1f4;
 }
 QTableWidget::item { padding: 3px; }
@@ -169,7 +164,7 @@ QTableWidget::item:selected { background-color: #cfe2ff; color: #1a1a1a; }
 QHeaderView::section {
     background-color: #eef1f4;
     color: #495057;
-    padding: 7px;
+    padding: 6px;
     border: none;
     border-bottom: 1px solid #dee2e6;
     font-weight: bold;
@@ -178,16 +173,15 @@ QHeaderView::section {
 
 QProgressBar {
     font-size: 9pt;
-    color: #343a40;
+    color: #333;
     background-color: #e9ecef;
     border: none;
-    border-radius: 7px;
+    border-radius: 5px;
     text-align: center;
-    min-height: 18px;
+    min-height: 16px;
 }
-QProgressBar::chunk { background-color: #007bff; border-radius: 7px; }
+QProgressBar::chunk { background-color: #007bff; border-radius: 5px; }
 
-QScrollArea { border: none; }
 QFrame[frameShape="4"] { color: #e3e6ea; }
 """
 
@@ -196,7 +190,8 @@ class TopologyCheckerDock(QgsDockWidget):
     """หน้าต่างหลักของปลั๊กอิน"""
 
     def __init__(self, iface, parent=None):
-        super().__init__("Node & Topology Checker", parent)
+        version = update_checker.read_local_version(PLUGIN_DIR)
+        super().__init__("Node & Topology Checker  Version {}".format(version), parent)
         self.iface = iface
         self.setObjectName("NodeTopologyCheckerDock")
 
@@ -226,13 +221,13 @@ class TopologyCheckerDock(QgsDockWidget):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
         grid.setColumnStretch(1, 1)
-        grid.addWidget(QLabel("ชั้นข้อมูล POINT:"), 0, 0)
+        grid.addWidget(QLabel("Layer หมุด (POINT):"), 0, 0)
         self.point_combo = QgsMapLayerComboBox()
         self.point_combo.setFilters(QgsMapLayerProxyModel.PointLayer)
         self.point_combo.setAllowEmptyLayer(True)
         grid.addWidget(self.point_combo, 0, 1)
 
-        grid.addWidget(QLabel("ชั้นข้อมูล POLYGON:"), 1, 0)
+        grid.addWidget(QLabel("Layer แปลง (POLYGON):"), 1, 0)
         self.polygon_combo = QgsMapLayerComboBox()
         self.polygon_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
         self.polygon_combo.setAllowEmptyLayer(True)
@@ -256,7 +251,8 @@ class TopologyCheckerDock(QgsDockWidget):
         self.tolerance_spin.setToolTip(
             "เศษทับซ้อน/ช่องว่างที่บางกว่าค่านี้จะไม่ถูกรายงาน (แก้ปัญหา false positive)")
         tol_row.addWidget(self.tolerance_spin)
-        tol_row.addWidget(QLabel("หน่วยแผนที่"))
+        self.tol_unit_label = QLabel("หน่วยแผนที่")
+        tol_row.addWidget(self.tol_unit_label)
         tol_row.addStretch(1)
         sv.addLayout(tol_row)
 
@@ -272,9 +268,10 @@ class TopologyCheckerDock(QgsDockWidget):
         self.node_tolerance_spin.setMinimumWidth(130)
         self.node_tolerance_spin.setToolTip(
             "ถ้ามีหมุด POINT อยู่ห่าง vertex ไม่เกินค่านี้ ถือว่า \"ตรงกัน\"\n"
-            "ดู \"ระยะถึงหมุดใกล้สุด\" ในตารางผลลัพธ์ แล้วตั้งค่านี้ให้สูงกว่าระยะที่ยอมรับได้")
+            "ดูคอลัมน์ \"ระยะห่าง\" ในตารางผลลัพธ์ แล้วตั้งค่านี้ให้สูงกว่าระยะที่ยอมรับได้")
         node_tol_row.addWidget(self.node_tolerance_spin)
-        node_tol_row.addWidget(QLabel("หน่วยแผนที่"))
+        self.node_unit_label = QLabel("หน่วยแผนที่")
+        node_tol_row.addWidget(self.node_unit_label)
         node_tol_row.addStretch(1)
         sv.addLayout(node_tol_row)
 
@@ -334,19 +331,19 @@ class TopologyCheckerDock(QgsDockWidget):
         self.summary_label = QLabel("ยังไม่ได้ตรวจสอบ")
         self.summary_label.setWordWrap(True)
         self.summary_label.setStyleSheet(
-            "font-size: 11pt; font-weight: bold; color: #495057;"
+            "font-size: 10pt; font-weight: bold; color: #495057;"
             " background-color: #eef4ff; border: 1px solid #cfe2ff;"
-            " border-radius: 6px; padding: 8px 10px;")
+            " border-radius: 4px; padding: 7px 9px;")
         root.addWidget(self.summary_label)
 
         # ---- ตารางผลลัพธ์ ----
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["ประเภท", "FID", "รายละเอียด", "พิกัด"])
+        # Node = ระยะห่างจากหมุดใกล้สุด (เมตร) | Overlap/Gap = พื้นที่ (ตร.ม.)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["ประเภท", "FID", "ระยะห่าง / พื้นที่"])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.setToolTip("ดับเบิลคลิกที่แถวเพื่อซูมไปยังตำแหน่งที่ผิดพลาด")
         self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
         root.addWidget(self.table, 1)
@@ -366,16 +363,11 @@ class TopologyCheckerDock(QgsDockWidget):
         upd_row.addStretch(1)
         root.addLayout(upd_row)
 
-        version = update_checker.read_local_version(PLUGIN_DIR)
-        self.version_label = QLabel("เวอร์ชันปัจจุบัน: {}".format(version))
-        self.version_label.setStyleSheet("font-size: 9pt; color: #868e96;")
-        root.addWidget(self.version_label)
+        # อัปเดตป้ายหน่วย (เมตร/องศา) ตาม CRS ของชั้น POLYGON ที่เลือก
+        self.polygon_combo.layerChanged.connect(self._update_unit_labels)
+        self._update_unit_labels()
 
-        # ใส่ container ลงใน scroll area เผื่อหน้าต่างแคบ
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(container)
-        self.setWidget(scroll)
+        self.setWidget(container)
 
     # ==================================================================
     # การตรวจสอบ Topology
@@ -520,6 +512,7 @@ class TopologyCheckerDock(QgsDockWidget):
     # ตาราง + ซูม
     # ==================================================================
     def _populate_table(self, results):
+        dist_abbr, area_abbr = self._unit_abbr()
         self.table.setRowCount(0)
         for item in results:
             row = self.table.rowCount()
@@ -531,23 +524,53 @@ class TopologyCheckerDock(QgsDockWidget):
             type_item.setData(GEOM_ROLE, QgsGeometry(geom) if geom else None)
 
             fids = ", ".join(str(x) for x in item.get("fids", ()))
-            coord = self._coord_text(item)
+            measure = self._measure_text(item, dist_abbr, area_abbr)
 
             self.table.setItem(row, 0, type_item)
             self.table.setItem(row, 1, QTableWidgetItem(fids))
-            self.table.setItem(row, 2, QTableWidgetItem(item.get("detail", "")))
-            self.table.setItem(row, 3, QTableWidgetItem(coord))
+            self.table.setItem(row, 2, QTableWidgetItem(measure))
         self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setStretchLastSection(True)
 
-    def _coord_text(self, item):
-        if "x" in item and "y" in item:
-            return "{:.3f}, {:.3f}".format(item["x"], item["y"])
-        geom = item.get("geometry")
-        if geom is not None and not geom.isEmpty():
-            c = geom.centroid().asPoint()
-            return "{:.3f}, {:.3f}".format(c.x(), c.y())
-        return ""
+    def _measure_text(self, item, dist_abbr, area_abbr):
+        """คอลัมน์ 'ระยะห่าง / พื้นที่':
+        Node = ระยะจาก vertex ถึงหมุดใกล้สุด (หน่วยระยะทาง)
+        Overlap/Gap = พื้นที่ที่ผิดพลาด (หน่วยพื้นที่)
+        """
+        if item.get("type") == "node":
+            d = item.get("distance")
+            if d is None:
+                return "ไม่มีหมุดใกล้เคียง"
+            return "{:.3f} {}".format(d, dist_abbr)
+        return "{:.3f} {}".format(item.get("area", 0.0), area_abbr)
+
+    def _unit_abbr(self):
+        """คืน (ตัวย่อหน่วยระยะ, ตัวย่อหน่วยพื้นที่) ตาม CRS ของผลลัพธ์"""
+        crs = self._result_crs
+        if crs is not None and crs.mapUnits() == QgsUnitTypes.DistanceMeters:
+            return "ม.", "ตร.ม."
+        if crs is not None and crs.mapUnits() == QgsUnitTypes.DistanceDegrees:
+            return "°", "ตร.°"
+        if crs is not None and crs.mapUnits() == QgsUnitTypes.DistanceFeet:
+            return "ฟุต", "ตร.ฟุต"
+        return "หน่วย", "ตร.หน่วย"
+
+    def _update_unit_labels(self):
+        """ปรับป้าย 'หน่วยแผนที่' ให้บอกหน่วยจริงของชั้น POLYGON ที่เลือก"""
+        layer = self.polygon_combo.currentLayer()
+        if layer is None:
+            text = "หน่วยแผนที่"
+        else:
+            u = layer.crs().mapUnits()
+            names = {
+                QgsUnitTypes.DistanceMeters: "เมตร",
+                QgsUnitTypes.DistanceKilometers: "กิโลเมตร",
+                QgsUnitTypes.DistanceFeet: "ฟุต",
+                QgsUnitTypes.DistanceDegrees: "องศา (ไม่แนะนำ — ควรใช้ CRS หน่วยเมตร)",
+            }
+            text = names.get(u, "หน่วยแผนที่")
+        self.tol_unit_label.setText(text)
+        self.node_unit_label.setText(text)
 
     def on_row_double_clicked(self, row, _column):
         type_item = self.table.item(row, 0)
