@@ -1,0 +1,567 @@
+# -*- coding: utf-8 -*-
+"""
+topology_dock.py — หน้าต่าง (Dock) หลักของปลั๊กอิน สร้าง UI ด้วยโค้ด (ภาษาไทย)
+
+รวมทุกฟีเจอร์: เลือกชั้น POINT/POLYGON, ตั้ง tolerance, เลือกขอบเขต (ทั้งหมด/หน้าต่าง),
+เลือกรายการตรวจ (Overlap/Gap/Node), แสดงผลสีแดง + ตารางผลลัพธ์ (คลิกซูม),
+และปุ่มตรวจสอบ/อัปเดตปลั๊กอินจาก GitHub
+
+ผู้พัฒนา : นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
+"""
+
+import os
+
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+from qgis.core import (
+    Qgis,
+    QgsApplication,
+    QgsCoordinateTransform,
+    QgsFeatureRequest,
+    QgsGeometry,
+    QgsMapLayerProxyModel,
+    QgsProject,
+    QgsRectangle,
+)
+from qgis.gui import QgsDockWidget, QgsMapLayerComboBox
+
+from .check_task import TopologyCheckTask
+from .result_layers import ResultLayerManager
+from . import update_checker
+
+PLUGIN_DIR = os.path.dirname(__file__)
+
+TYPE_LABEL = {
+    "overlap": "ทับซ้อน (Overlap)",
+    "gap": "ช่องว่าง (Gap)",
+    "node": "Node ไม่ตรงหมุด",
+}
+
+GEOM_ROLE = Qt.UserRole + 1
+
+
+class TopologyCheckerDock(QgsDockWidget):
+    """หน้าต่างหลักของปลั๊กอิน"""
+
+    def __init__(self, iface, parent=None):
+        super().__init__("Node & Topology Checker", parent)
+        self.iface = iface
+        self.setObjectName("NodeTopologyCheckerDock")
+
+        self.result_manager = ResultLayerManager()
+        self.task = None            # งานตรวจสอบที่กำลังรัน
+        self.update_task = None     # งานตรวจสอบเวอร์ชัน
+        self.install_task = None    # งานติดตั้งอัปเดต
+        self._result_crs = None
+
+        self._build_ui()
+
+    # ==================================================================
+    # สร้าง UI
+    # ==================================================================
+    def _build_ui(self):
+        container = QWidget()
+        root = QVBoxLayout(container)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
+
+        # ---- กลุ่ม: เลือกชั้นข้อมูล ----
+        layer_group = QGroupBox("เลือกชั้นข้อมูลสำหรับตรวจสอบ")
+        grid = QGridLayout(layer_group)
+        grid.addWidget(QLabel("ชั้นข้อมูล POINT:"), 0, 0)
+        self.point_combo = QgsMapLayerComboBox()
+        self.point_combo.setFilters(QgsMapLayerProxyModel.PointLayer)
+        self.point_combo.setAllowEmptyLayer(True)
+        grid.addWidget(self.point_combo, 0, 1)
+
+        grid.addWidget(QLabel("ชั้นข้อมูล POLYGON:"), 1, 0)
+        self.polygon_combo = QgsMapLayerComboBox()
+        self.polygon_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.polygon_combo.setAllowEmptyLayer(True)
+        grid.addWidget(self.polygon_combo, 1, 1)
+        root.addWidget(layer_group)
+
+        # ---- กลุ่ม: ตั้งค่าการตรวจสอบ ----
+        setting_group = QGroupBox("ตั้งค่าการตรวจสอบ")
+        sv = QVBoxLayout(setting_group)
+
+        tol_row = QHBoxLayout()
+        tol_row.addWidget(QLabel("ค่าความคลาดเคลื่อน (Tolerance):"))
+        self.tolerance_spin = QDoubleSpinBox()
+        self.tolerance_spin.setDecimals(6)
+        self.tolerance_spin.setRange(0.0, 1000000.0)
+        self.tolerance_spin.setSingleStep(0.001)
+        self.tolerance_spin.setValue(0.005)
+        self.tolerance_spin.setToolTip(
+            "เศษทับซ้อน/ช่องว่างที่บางกว่าค่านี้จะไม่ถูกรายงาน (แก้ปัญหา false positive)\n"
+            "และใช้เป็นระยะยอมรับว่า Vertex ตรงกับหมุด POINT")
+        tol_row.addWidget(self.tolerance_spin)
+        tol_row.addWidget(QLabel("หน่วยแผนที่"))
+        tol_row.addStretch(1)
+        sv.addLayout(tol_row)
+
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("ขอบเขต:"))
+        self.scope_all = QRadioButton("ตรวจทั้งหมด")
+        self.scope_window = QRadioButton("เฉพาะหน้าต่างปัจจุบัน")
+        self.scope_all.setChecked(True)
+        self.scope_group = QButtonGroup(self)
+        self.scope_group.addButton(self.scope_all)
+        self.scope_group.addButton(self.scope_window)
+        scope_row.addWidget(self.scope_all)
+        scope_row.addWidget(self.scope_window)
+        scope_row.addStretch(1)
+        sv.addLayout(scope_row)
+
+        sv.addWidget(QLabel("รายการที่ต้องการตรวจ:"))
+        self.chk_overlap = QCheckBox("ตรวจการทับซ้อน (Overlap)")
+        self.chk_gap = QCheckBox("ตรวจช่องว่าง (Gap)")
+        self.chk_node = QCheckBox("ตรวจ Node/Vertex กับ POINT")
+        self.chk_overlap.setChecked(True)
+        self.chk_gap.setChecked(True)
+        self.chk_node.setChecked(True)
+        sv.addWidget(self.chk_overlap)
+        sv.addWidget(self.chk_gap)
+        sv.addWidget(self.chk_node)
+        root.addWidget(setting_group)
+
+        # ---- ปุ่มสั่งตรวจ ----
+        btn_row = QHBoxLayout()
+        self.btn_run = QPushButton("▶ ตรวจสอบ Topology")
+        self.btn_run.clicked.connect(self.on_run)
+        self.btn_clear = QPushButton("ล้างผลลัพธ์")
+        self.btn_clear.clicked.connect(self.on_clear)
+        self.btn_cancel = QPushButton("ยกเลิก")
+        self.btn_cancel.clicked.connect(self.on_cancel)
+        self.btn_cancel.setEnabled(False)
+        btn_row.addWidget(self.btn_run)
+        btn_row.addWidget(self.btn_clear)
+        btn_row.addWidget(self.btn_cancel)
+        root.addLayout(btn_row)
+
+        # ---- progress + สรุป ----
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        root.addWidget(self.progress)
+
+        self.summary_label = QLabel("ยังไม่ได้ตรวจสอบ")
+        self.summary_label.setWordWrap(True)
+        root.addWidget(self.summary_label)
+
+        # ---- ตารางผลลัพธ์ ----
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["ประเภท", "FID", "รายละเอียด", "พิกัด"])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.setToolTip("ดับเบิลคลิกที่แถวเพื่อซูมไปยังตำแหน่งที่ผิดพลาด")
+        self.table.cellDoubleClicked.connect(self.on_row_double_clicked)
+        root.addWidget(self.table, 1)
+
+        # ---- เส้นคั่น + ส่วนอัปเดต ----
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        root.addWidget(line)
+
+        upd_row = QHBoxLayout()
+        self.btn_update = QPushButton("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.btn_update.clicked.connect(self.on_check_update)
+        self.btn_settings = QPushButton("ตั้งค่า GitHub")
+        self.btn_settings.clicked.connect(self.on_github_settings)
+        upd_row.addWidget(self.btn_update)
+        upd_row.addWidget(self.btn_settings)
+        upd_row.addStretch(1)
+        root.addLayout(upd_row)
+
+        version = update_checker.read_local_version(PLUGIN_DIR)
+        self.version_label = QLabel("เวอร์ชันปัจจุบัน: {}".format(version))
+        root.addWidget(self.version_label)
+
+        # ใส่ container ลงใน scroll area เผื่อหน้าต่างแคบ
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        self.setWidget(scroll)
+
+    # ==================================================================
+    # การตรวจสอบ Topology
+    # ==================================================================
+    def on_run(self):
+        if self.task is not None:
+            self.iface.messageBar().pushMessage(
+                "กำลังตรวจสอบอยู่", "โปรดรอให้งานปัจจุบันเสร็จก่อน", level=Qgis.Info, duration=4)
+            return
+
+        poly_layer = self.polygon_combo.currentLayer()
+        point_layer = self.point_combo.currentLayer()
+
+        do_overlap = self.chk_overlap.isChecked()
+        do_gap = self.chk_gap.isChecked()
+        do_node = self.chk_node.isChecked()
+
+        if not (do_overlap or do_gap or do_node):
+            self._warn("กรุณาเลือกรายการตรวจอย่างน้อย 1 อย่าง")
+            return
+        if poly_layer is None:
+            self._warn("กรุณาเลือกชั้นข้อมูล POLYGON")
+            return
+        if do_node and point_layer is None:
+            self._warn("การตรวจ Node ต้องเลือกชั้นข้อมูล POINT ด้วย")
+            return
+
+        tolerance = self.tolerance_spin.value()
+
+        # เตรียม request ตามขอบเขต
+        poly_request = QgsFeatureRequest()
+        try:
+            poly_request.setNoAttributes()
+        except Exception:  # noqa: BLE001
+            pass
+
+        if self.scope_window.isChecked():
+            rect = self._canvas_rect_in_crs(poly_layer.crs())
+            if rect is not None:
+                poly_request.setFilterRect(rect)
+
+        polygon_features = self._extract_features(poly_layer, poly_request)
+        if not polygon_features:
+            self._warn("ไม่พบข้อมูลโพลิกอนในขอบเขตที่เลือก")
+            return
+
+        point_features = []
+        if do_node:
+            transform = None
+            if point_layer.crs() != poly_layer.crs():
+                transform = QgsCoordinateTransform(
+                    point_layer.crs(), poly_layer.crs(), QgsProject.instance())
+            pt_request = QgsFeatureRequest()
+            try:
+                pt_request.setNoAttributes()
+            except Exception:  # noqa: BLE001
+                pass
+            if self.scope_window.isChecked():
+                rect = self._canvas_rect_in_crs(point_layer.crs())
+                if rect is not None:
+                    pt_request.setFilterRect(rect)
+            point_features = self._extract_features(point_layer, pt_request, transform)
+
+        self._result_crs = poly_layer.crs()
+
+        # เริ่มงาน background
+        self.task = TopologyCheckTask(
+            polygon_features, point_features, tolerance, do_overlap, do_gap, do_node)
+        self.task.set_callback(self.on_check_finished)
+        # ใช้ bound method เพื่อให้ Qt เลือก QueuedConnection อัตโนมัติ (progress มาจาก worker thread)
+        self.task.progressChanged.connect(self._on_task_progress)
+
+        self._set_running(True)
+        QgsApplication.taskManager().addTask(self.task)
+
+    def on_check_finished(self, success, task):
+        self._set_running(False)
+        current = self.task
+        self.task = None
+
+        if not success:
+            if task.isCanceled():
+                self.summary_label.setText("ยกเลิกการตรวจสอบแล้ว")
+            else:
+                msg = task.error_message or "ไม่ทราบสาเหตุ"
+                self._warn("ตรวจสอบไม่สำเร็จ: {}".format(msg))
+                self.summary_label.setText("เกิดข้อผิดพลาด")
+            return
+
+        results = task.results
+        self.result_manager.build(results, self._result_crs)
+        self._populate_table(results)
+
+        s = task.summary
+        self.summary_label.setText(
+            "พบข้อผิดพลาด: ทับซ้อน {} | ช่องว่าง {} | Node {}  (รวม {} รายการ)".format(
+                s["overlap"], s["gap"], s["node"], len(results)))
+
+        if results:
+            self.iface.messageBar().pushMessage(
+                "ตรวจสอบเสร็จ",
+                "พบ {} จุดที่ต้องแก้ไข — ดับเบิลคลิกที่แถวในตารางเพื่อซูม".format(len(results)),
+                level=Qgis.Warning, duration=6)
+        else:
+            self.iface.messageBar().pushMessage(
+                "ตรวจสอบเสร็จ", "ไม่พบข้อผิดพลาด ✔", level=Qgis.Success, duration=5)
+
+    def _on_task_progress(self, value):
+        self.progress.setValue(int(value))
+
+    def on_cancel(self):
+        if self.task is not None:
+            self.task.cancel()
+
+    def on_clear(self):
+        self.result_manager.clear()
+        self.table.setRowCount(0)
+        self.summary_label.setText("ล้างผลลัพธ์แล้ว")
+
+    # ==================================================================
+    # ตาราง + ซูม
+    # ==================================================================
+    def _populate_table(self, results):
+        self.table.setRowCount(0)
+        for item in results:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+
+            type_item = QTableWidgetItem(TYPE_LABEL.get(item["type"], item["type"]))
+            # เก็บ geometry (CRS ของผลลัพธ์) ไว้ใช้ซูม
+            geom = item["geometry"]
+            type_item.setData(GEOM_ROLE, QgsGeometry(geom) if geom else None)
+
+            fids = ", ".join(str(x) for x in item.get("fids", ()))
+            coord = self._coord_text(item)
+
+            self.table.setItem(row, 0, type_item)
+            self.table.setItem(row, 1, QTableWidgetItem(fids))
+            self.table.setItem(row, 2, QTableWidgetItem(item.get("detail", "")))
+            self.table.setItem(row, 3, QTableWidgetItem(coord))
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+
+    def _coord_text(self, item):
+        if "x" in item and "y" in item:
+            return "{:.3f}, {:.3f}".format(item["x"], item["y"])
+        geom = item.get("geometry")
+        if geom is not None and not geom.isEmpty():
+            c = geom.centroid().asPoint()
+            return "{:.3f}, {:.3f}".format(c.x(), c.y())
+        return ""
+
+    def on_row_double_clicked(self, row, _column):
+        type_item = self.table.item(row, 0)
+        if type_item is None:
+            return
+        geom = type_item.data(GEOM_ROLE)
+        if geom is None or geom.isEmpty() or self._result_crs is None:
+            return
+
+        canvas = self.iface.mapCanvas()
+        dest_crs = canvas.mapSettings().destinationCrs()
+
+        display_geom = QgsGeometry(geom)
+        if self._result_crs != dest_crs:
+            xform = QgsCoordinateTransform(self._result_crs, dest_crs, QgsProject.instance())
+            try:
+                display_geom.transform(xform)
+            except Exception:  # noqa: BLE001
+                return
+
+        bbox = display_geom.boundingBox()
+        if bbox.width() < 1e-9 and bbox.height() < 1e-9:
+            # จุดเดี่ยว: ทำกรอบเล็ก ๆ รอบจุด (สัมพัทธ์กับมุมมองปัจจุบัน)
+            cur = canvas.extent()
+            margin = max(cur.width() * 0.03, 1e-6)
+            c = bbox.center()
+            bbox = QgsRectangle(c.x() - margin, c.y() - margin,
+                                c.x() + margin, c.y() + margin)
+        else:
+            bbox.scale(1.6)
+
+        canvas.setExtent(bbox)
+        canvas.refresh()
+        # ไฮไลต์กะพริบสีแดงที่ตำแหน่ง
+        try:
+            canvas.flashGeometries([QgsGeometry(geom)], self._result_crs)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ==================================================================
+    # ตรวจสอบ / อัปเดตปลั๊กอิน
+    # ==================================================================
+    def on_check_update(self):
+        if self.update_task is not None or self.install_task is not None:
+            return
+        if not update_checker.is_repo_configured():
+            QMessageBox.information(
+                self, "ยังไม่ได้ตั้งค่า GitHub",
+                "กรุณากดปุ่ม \"ตั้งค่า GitHub\" เพื่อระบุ repository ก่อน\n"
+                "รูปแบบ: owner/repository เช่น phakphum/QGIS_Node_TopologyChecker")
+            return
+
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText("กำลังตรวจสอบ...")
+        self.update_task = update_checker.UpdateCheckTask(PLUGIN_DIR)
+        self.update_task.set_callback(self.on_update_checked)
+        QgsApplication.taskManager().addTask(self.update_task)
+
+    def on_update_checked(self, success, task):
+        self.btn_update.setEnabled(True)
+        self.btn_update.setText("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.update_task = None
+
+        if not success:
+            QMessageBox.warning(
+                self, "ตรวจสอบอัปเดตไม่สำเร็จ",
+                "ไม่สามารถเชื่อมต่อ GitHub ได้\n\nรายละเอียด: {}".format(
+                    task.error_message or "ไม่ทราบสาเหตุ"))
+            return
+
+        if task.has_update():
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Information)
+            box.setWindowTitle("มีเวอร์ชันใหม่")
+            box.setText(
+                "มีเวอร์ชันใหม่ให้อัปเดต\n\nเวอร์ชันปัจจุบัน: {}\nเวอร์ชันล่าสุด: {}".format(
+                    task.local_version, task.remote_version))
+            btn_update = box.addButton("อัปเดตเลย", QMessageBox.AcceptRole)
+            btn_web = box.addButton("เปิดหน้า GitHub", QMessageBox.ActionRole)
+            box.addButton("ปิด", QMessageBox.RejectRole)
+            box.exec_()
+
+            clicked = box.clickedButton()
+            if clicked == btn_update:
+                self._start_install(task.resolved_branch)
+            elif clicked == btn_web:
+                self._open_web(update_checker.repo_web_url())
+        else:
+            QMessageBox.information(
+                self, "ใช้เวอร์ชันล่าสุดแล้ว",
+                "คุณกำลังใช้ปลั๊กอินเวอร์ชันล่าสุดแล้ว ({})".format(task.local_version))
+
+    def _start_install(self, branch):
+        self.install_task = update_checker.UpdateInstallTask(PLUGIN_DIR, branch)
+        self.install_task.set_callback(self.on_update_installed)
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText("กำลังดาวน์โหลด...")
+        QgsApplication.taskManager().addTask(self.install_task)
+
+    def on_update_installed(self, success, task):
+        self.btn_update.setEnabled(True)
+        self.btn_update.setText("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.install_task = None
+
+        if success:
+            QMessageBox.information(
+                self, "อัปเดตเสร็จแล้ว",
+                "ดาวน์โหลดและติดตั้งเวอร์ชันใหม่เรียบร้อย\n\n"
+                "กรุณาปิดและเปิด QGIS ใหม่ เพื่อเริ่มใช้งานเวอร์ชันล่าสุด")
+        else:
+            QMessageBox.warning(
+                self, "อัปเดตไม่สำเร็จ",
+                "ไม่สามารถติดตั้งอัปเดตได้\n\nรายละเอียด: {}".format(
+                    task.error_message or "ไม่ทราบสาเหตุ"))
+
+    def on_github_settings(self):
+        current_repo = update_checker.get_repo()
+        repo, ok = QInputDialog.getText(
+            self, "ตั้งค่า GitHub repository",
+            "ระบุ repository (owner/repository):", text=current_repo)
+        if not ok:
+            return
+        update_checker.set_repo(repo)
+
+        current_branch = update_checker.get_branch()
+        branch, ok2 = QInputDialog.getText(
+            self, "ตั้งค่า Branch",
+            "ระบุ branch หลัก (ปล่อยว่างได้ ระบบจะลอง main/master ให้):",
+            text=current_branch)
+        if ok2:
+            update_checker.set_branch(branch)
+
+        self.iface.messageBar().pushMessage(
+            "บันทึกแล้ว", "ตั้งค่า GitHub: {}".format(update_checker.get_repo()),
+            level=Qgis.Info, duration=4)
+
+    # ==================================================================
+    # ตัวช่วย
+    # ==================================================================
+    def _extract_features(self, layer, request, transform=None):
+        """ดึง (fid, QgsGeometry) ออกจาก layer (คัดลอก geometry ออกมา แปลง CRS ถ้าจำเป็น)"""
+        out = []
+        for feat in layer.getFeatures(request):
+            geom = feat.geometry()
+            if geom is None or geom.isEmpty():
+                continue
+            g = QgsGeometry(geom)
+            if transform is not None:
+                try:
+                    g.transform(transform)
+                except Exception:  # noqa: BLE001
+                    continue
+            out.append((feat.id(), g))
+        return out
+
+    def _canvas_rect_in_crs(self, dest_crs):
+        """คืนกรอบมุมมองแผนที่ปัจจุบัน แปลงเข้าสู่ CRS ที่ต้องการ"""
+        canvas = self.iface.mapCanvas()
+        extent = canvas.extent()
+        src_crs = canvas.mapSettings().destinationCrs()
+        if src_crs == dest_crs:
+            return extent
+        try:
+            xform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+            return xform.transformBoundingBox(extent)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _set_running(self, running):
+        self.btn_run.setEnabled(not running)
+        self.btn_clear.setEnabled(not running)
+        self.btn_cancel.setEnabled(running)
+        self.progress.setVisible(running)
+        if running:
+            self.progress.setValue(0)
+            self.summary_label.setText("กำลังตรวจสอบ...")
+
+    def _open_web(self, url):
+        from qgis.PyQt.QtGui import QDesktopServices
+        from qgis.PyQt.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _warn(self, message):
+        self.iface.messageBar().pushMessage(
+            "แจ้งเตือน", message, level=Qgis.Warning, duration=5)
+
+    # ==================================================================
+    # cleanup (เรียกตอน unload ปลั๊กอิน)
+    # ==================================================================
+    def cleanup(self):
+        if self.task is not None:
+            try:
+                self.task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        if self.update_task is not None:
+            try:
+                self.update_task.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        if self.install_task is not None:
+            try:
+                self.install_task.cancel()
+            except Exception:  # noqa: BLE001
+                pass

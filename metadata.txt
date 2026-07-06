@@ -1,0 +1,26 @@
+[general]
+name=Node & Topology Checker
+qgisMinimumVersion=3.28
+description=ตรวจสอบ Topology (Gap/Overlap) แบบมีค่า Tolerance และตรวจสอบ Node/Vertex ของ POLYGON ที่ไม่ตรงกับ POINT
+about=ปลั๊กอินสำหรับตรวจสอบคุณภาพข้อมูลรังวัด/แปลงที่ดิน ตรวจการทับซ้อน (Overlap) และช่องว่าง (Gap) ของ POLYGON แบบมีค่าความคลาดเคลื่อน (Tolerance) เพื่อลด false positive จากเศษ sliver และตรวจสอบว่า vertex ของ POLYGON ตรงกับหมุด POINT หรือไม่ พร้อมระบบตรวจสอบเวอร์ชัน/อัปเดตผ่าน GitHub
+version=1.0.0
+author=นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
+email=poonza2538@gmail.com
+
+; --- ข้อมูลผู้พัฒนา (เก็บไว้ในไฟล์ ไม่แสดงบนหน้าต่างปลั๊กอิน) ---
+; ชื่อผู้พัฒนา : นายภาคภูมิ สูบกำปัง
+; ตำแหน่ง     : วิศวกรรังวัดปฏิบัติการ
+; สังกัด       : กองเทคโนโลยีทำแผนที่
+
+tracker=https://github.com/CHANGE_ME/QGIS_Node_TopologyChecker/issues
+repository=https://github.com/CHANGE_ME/QGIS_Node_TopologyChecker
+homepage=https://github.com/CHANGE_ME/QGIS_Node_TopologyChecker
+
+category=Vector
+icon=resources/icon.png
+experimental=False
+deprecated=False
+tags=topology,overlap,gap,node,vertex,cadastre,quality,ตรวจสอบ,รังวัด,แปลงที่ดิน
+
+changelog=
+    1.0.0 - รุ่นแรก: ตรวจ Overlap/Gap แบบมี Tolerance, ตรวจ Node vs POINT, ระบบอัปเดตผ่าน GitHub
