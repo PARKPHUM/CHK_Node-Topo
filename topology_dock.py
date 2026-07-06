@@ -60,6 +60,88 @@ TYPE_LABEL = {
 
 GEOM_ROLE = Qt.UserRole + 1
 
+# ==================================================================
+# สไตล์ปุ่ม (ปุ่มสีต่าง ๆ + เอฟเฟกต์ hover/pressed/disabled)
+# ==================================================================
+_BTN_BASE = (
+    "QPushButton {{"
+    " background-color: {bg}; color: white; border: none;"
+    " border-radius: 6px; padding: 8px 14px; font-weight: bold;"
+    " min-height: 18px; }}"
+    "QPushButton:hover {{ background-color: {hover}; }}"
+    "QPushButton:pressed {{ background-color: {pressed}; }}"
+    "QPushButton:disabled {{ background-color: #cfd8dc; color: #eceff1; }}"
+)
+
+# ปุ่ม "อัปเดตปลั๊กอิน" — สีแดง
+BTN_RED = _BTN_BASE.format(bg="#e53935", hover="#f44336", pressed="#c62828")
+# ปุ่ม "ตรวจสอบ Topology/Node" — สีฟ้า
+BTN_BLUE = _BTN_BASE.format(bg="#1e88e5", hover="#2196f3", pressed="#1565c0")
+# ปุ่ม "ล้างผลลัพธ์" — สีเทา
+BTN_GRAY = _BTN_BASE.format(bg="#757575", hover="#8e8e8e", pressed="#616161")
+
+# ปุ่ม "ยกเลิก" — แบบเส้นขอบ (outline) ให้ดูเบากว่า ไม่แย่งความสนใจ
+BTN_OUTLINE = (
+    "QPushButton {"
+    " background-color: transparent; color: #d84315;"
+    " border: 1px solid #d84315; border-radius: 6px;"
+    " padding: 8px 14px; font-weight: bold; min-height: 18px; }"
+    "QPushButton:hover:enabled { background-color: #fbe9e7; }"
+    "QPushButton:pressed:enabled { background-color: #ffccbc; }"
+    "QPushButton:disabled { color: #bdbdbd; border-color: #e0e0e0; }"
+)
+
+# สไตล์รวมของหน้าต่าง — เก็บโทนของธีม QGIS ไว้ (ไม่ทับสีพื้น/ตัวหนังสือ)
+# แต่งเฉพาะกรอบกลุ่ม ช่องกรอก ตาราง ให้ดูทันสมัยขึ้น
+DOCK_QSS = """
+QGroupBox {
+    border: 1px solid palette(mid);
+    border-radius: 8px;
+    margin-top: 14px;
+    padding: 8px 6px 6px 6px;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+    color: palette(highlight);
+}
+QDoubleSpinBox, QComboBox {
+    border: 1px solid palette(mid);
+    border-radius: 5px;
+    padding: 3px 6px;
+    min-height: 20px;
+}
+QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid palette(highlight);
+}
+QCheckBox, QRadioButton { spacing: 6px; padding: 2px 0; }
+QTableWidget {
+    border: 1px solid palette(mid);
+    border-radius: 6px;
+    gridline-color: palette(midlight);
+}
+QHeaderView::section {
+    background-color: palette(button);
+    padding: 5px;
+    border: none;
+    border-bottom: 1px solid palette(mid);
+    font-weight: bold;
+}
+QProgressBar {
+    border: 1px solid palette(mid);
+    border-radius: 5px;
+    text-align: center;
+    min-height: 16px;
+}
+QProgressBar::chunk {
+    background-color: #1e88e5;
+    border-radius: 4px;
+}
+"""
+
 
 class TopologyCheckerDock(QgsDockWidget):
     """หน้าต่างหลักของปลั๊กอิน"""
@@ -83,9 +165,10 @@ class TopologyCheckerDock(QgsDockWidget):
     # ==================================================================
     def _build_ui(self):
         container = QWidget()
+        container.setStyleSheet(DOCK_QSS)
         root = QVBoxLayout(container)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
 
         # ---- กลุ่ม: เลือกชั้นข้อมูล ----
         layer_group = QGroupBox("เลือกชั้นข้อมูลสำหรับตรวจสอบ")
@@ -165,16 +248,23 @@ class TopologyCheckerDock(QgsDockWidget):
 
         # ---- ปุ่มสั่งตรวจ ----
         btn_row = QHBoxLayout()
-        self.btn_run = QPushButton("▶ ตรวจสอบ Topology")
+        btn_row.setSpacing(8)
+        self.btn_run = QPushButton("▶ ตรวจสอบ Topology/Node")
+        self.btn_run.setStyleSheet(BTN_BLUE)
+        self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.clicked.connect(self.on_run)
         self.btn_clear = QPushButton("ล้างผลลัพธ์")
+        self.btn_clear.setStyleSheet(BTN_GRAY)
+        self.btn_clear.setCursor(Qt.PointingHandCursor)
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_cancel = QPushButton("ยกเลิก")
+        self.btn_cancel.setStyleSheet(BTN_OUTLINE)
+        self.btn_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.on_cancel)
         self.btn_cancel.setEnabled(False)
-        btn_row.addWidget(self.btn_run)
-        btn_row.addWidget(self.btn_clear)
-        btn_row.addWidget(self.btn_cancel)
+        btn_row.addWidget(self.btn_run, 2)
+        btn_row.addWidget(self.btn_clear, 1)
+        btn_row.addWidget(self.btn_cancel, 1)
         root.addLayout(btn_row)
 
         # ---- progress + สรุป ----
@@ -207,7 +297,9 @@ class TopologyCheckerDock(QgsDockWidget):
         root.addWidget(line)
 
         upd_row = QHBoxLayout()
-        self.btn_update = QPushButton("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.btn_update = QPushButton("อัปเดตปลั๊กอิน")
+        self.btn_update.setStyleSheet(BTN_RED)
+        self.btn_update.setCursor(Qt.PointingHandCursor)
         self.btn_update.clicked.connect(self.on_check_update)
         upd_row.addWidget(self.btn_update)
         upd_row.addStretch(1)
