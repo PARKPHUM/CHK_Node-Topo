@@ -3,7 +3,7 @@ name=Node & Topology Checker
 qgisMinimumVersion=3.28
 description=ตรวจสอบ Topology (Gap/Overlap) แบบมีค่า Tolerance และตรวจสอบ Node/Vertex ของ POLYGON ที่ไม่ตรงกับ POINT
 about=ปลั๊กอินสำหรับตรวจสอบคุณภาพข้อมูลรังวัด/แปลงที่ดิน ตรวจการทับซ้อน (Overlap) และช่องว่าง (Gap) ของ POLYGON แบบมีค่าความคลาดเคลื่อน (Tolerance) เพื่อลด false positive จากเศษ sliver และตรวจสอบว่า vertex ของ POLYGON ตรงกับหมุด POINT หรือไม่ พร้อมระบบตรวจสอบเวอร์ชัน/อัปเดตผ่าน GitHub
-version=1.0.6
+version=1.0.7
 author=นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
 email=poonza2538@gmail.com
 
@@ -23,6 +23,9 @@ deprecated=False
 tags=topology,overlap,gap,node,vertex,cadastre,quality,ตรวจสอบ,รังวัด,แปลงที่ดิน
 
 changelog=
+    1.0.7 - หน้าต่างแจ้งเวอร์ชันใหม่ล้อตาม Filter_PATH: เหลือ 2 ปุ่ม "อัปเดต"/"ยกเลิก"
+            (ตัดปุ่ม "เปิดหน้า GitHub" ออก), ข้อความ "พบเวอร์ชันใหม่: .. / ปัจจุบัน: ..",
+            ตัวติดตั้งอัปเดตแข็งแรงขึ้น ลอง codeload+archive และ main/master กัน HTTP 404
     1.0.6 - dropdown เลือก layer ใช้สไตล์ native เหมือน Filter_PATH (ลูกศร ▼ ไม่มีกรอบครอบ),
             ชั้น "Node ไม่ตรงหมุด" ตั้งความโปร่งใส 40%,
             ตั้ง tolerance เป็นค่า default ตายตัว 0.001 ม. (Overlap/Gap และ Node)

@@ -103,6 +103,30 @@ def _open_url(url):
             return resp.read()
 
 
+def _download_repo_zip(repo, branch):
+    """ดาวน์โหลด zip ของ repo — ลองหลาย URL/branch กัน HTTP 404
+    (codeload + archive, และเผื่อ branch main/master สลับกัน)"""
+    branches = []
+    for b in (branch, "main", "master"):
+        if b and b not in branches:
+            branches.append(b)
+
+    urls = []
+    for b in branches:
+        urls.append("https://codeload.github.com/{}/zip/refs/heads/{}".format(repo, b))
+        urls.append("https://github.com/{}/archive/refs/heads/{}.zip".format(repo, b))
+
+    last_error = None
+    for url in urls:
+        try:
+            return _open_url(url)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("ดาวน์โหลดไฟล์อัปเดตไม่สำเร็จ")
+
+
 def fetch_remote_version(repo, branch):
     """ดึงเวอร์ชันล่าสุดจาก raw metadata.txt (ลองทั้ง branch ที่ตั้งไว้และ master)"""
     branches = [branch] if branch else []
@@ -183,9 +207,7 @@ class UpdateInstallTask(QgsTask):
         tmp_dir = None
         try:
             self.setProgress(5)
-            zip_url = "https://codeload.github.com/{}/zip/refs/heads/{}".format(
-                self.repo, self.branch)
-            data = _open_url(zip_url)
+            data = _download_repo_zip(self.repo, self.branch)
             if self.isCanceled():
                 return False
             self.setProgress(50)

@@ -554,7 +554,7 @@ class TopologyCheckerDock(QgsDockWidget):
 
     def on_update_checked(self, success, task):
         self.btn_update.setEnabled(True)
-        self.btn_update.setText("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.btn_update.setText("อัปเดตปลั๊กอิน")
         self.update_task = None
 
         if not success:
@@ -567,20 +567,16 @@ class TopologyCheckerDock(QgsDockWidget):
         if task.has_update():
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Information)
-            box.setWindowTitle("มีเวอร์ชันใหม่")
+            box.setWindowTitle("พบเวอร์ชันใหม่")
             box.setText(
-                "มีเวอร์ชันใหม่ให้อัปเดต\n\nเวอร์ชันปัจจุบัน: {}\nเวอร์ชันล่าสุด: {}".format(
-                    task.local_version, task.remote_version))
-            btn_update = box.addButton("อัปเดตเลย", QMessageBox.AcceptRole)
-            btn_web = box.addButton("เปิดหน้า GitHub", QMessageBox.ActionRole)
-            box.addButton("ปิด", QMessageBox.RejectRole)
+                "พบเวอร์ชันใหม่: {}\nเวอร์ชันปัจจุบันของคุณ: {}".format(
+                    task.remote_version, task.local_version))
+            btn_update = box.addButton("อัปเดต", QMessageBox.AcceptRole)
+            box.addButton("ยกเลิก", QMessageBox.RejectRole)
             box.exec_()
 
-            clicked = box.clickedButton()
-            if clicked == btn_update:
+            if box.clickedButton() == btn_update:
                 self._start_install(task.resolved_branch)
-            elif clicked == btn_web:
-                self._open_web(update_checker.repo_web_url())
         else:
             QMessageBox.information(
                 self, "ใช้เวอร์ชันล่าสุดแล้ว",
@@ -595,7 +591,7 @@ class TopologyCheckerDock(QgsDockWidget):
 
     def on_update_installed(self, success, task):
         self.btn_update.setEnabled(True)
-        self.btn_update.setText("ตรวจสอบอัปเดตปลั๊กอิน")
+        self.btn_update.setText("อัปเดตปลั๊กอิน")
         self.install_task = None
 
         if success:
@@ -668,11 +664,6 @@ class TopologyCheckerDock(QgsDockWidget):
         if running:
             self.progress.setValue(0)
             self.summary_label.setText("กำลังตรวจสอบ...")
-
-    def _open_web(self, url):
-        from qgis.PyQt.QtGui import QDesktopServices
-        from qgis.PyQt.QtCore import QUrl
-        QDesktopServices.openUrl(QUrl(url))
 
     def _warn(self, message):
         self.iface.messageBar().pushMessage(
