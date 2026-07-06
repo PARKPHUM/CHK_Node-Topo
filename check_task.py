@@ -19,12 +19,13 @@ from .checks.node_check import find_unmatched_vertices
 class TopologyCheckTask(QgsTask):
     """งานตรวจสอบ Overlap / Gap / Node แบบ background"""
 
-    def __init__(self, polygon_features, point_features, tolerance,
+    def __init__(self, polygon_features, point_features, tolerance, node_tolerance,
                  do_overlap, do_gap, do_node):
         super().__init__("ตรวจสอบ Topology / Node", QgsTask.CanCancel)
         self.polygon_features = polygon_features
         self.point_features = point_features
-        self.tolerance = tolerance
+        self.tolerance = tolerance            # สำหรับ Overlap/Gap
+        self.node_tolerance = node_tolerance  # ระยะยอมรับสำหรับ Node/หมุด (แยกต่างหาก)
         self.do_overlap = do_overlap
         self.do_gap = do_gap
         self.do_node = do_node
@@ -59,7 +60,7 @@ class TopologyCheckTask(QgsTask):
 
             if self.do_node:
                 results.extend(find_unmatched_vertices(
-                    self.polygon_features, self.point_features, self.tolerance, self))
+                    self.polygon_features, self.point_features, self.node_tolerance, self))
             if self.isCanceled():
                 return False
 

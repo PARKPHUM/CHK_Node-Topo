@@ -6,6 +6,13 @@ __pycache__/
 # ไฟล์ zip ที่บีบอัดไว้แจกจ่าย (สร้างใหม่ได้)
 *.zip
 
+# ข้อมูลทดสอบ (Shapefiles จริง) — ไม่อัปขึ้น GitHub
+test_data/
+Shapefiles/
+
+# สำเนา repo ที่ clone มาไว้ในเครื่อง — ไม่ใช่ส่วนหนึ่งของปลั๊กอิน
+CHK_Node-Topo/
+
 # ไฟล์ระบบ
 .DS_Store
 Thumbs.db

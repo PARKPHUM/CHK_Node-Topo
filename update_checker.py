@@ -24,36 +24,25 @@ import tempfile
 import zipfile
 from urllib.request import Request, urlopen
 
-from qgis.core import QgsSettings, QgsTask, QgsMessageLog, Qgis
+from qgis.core import QgsTask, QgsMessageLog, Qgis
 
-# ---- ค่าเริ่มต้น (ผู้ใช้เปลี่ยนได้ผ่านปุ่มตั้งค่าในหน้าต่าง) --------------------
-DEFAULT_REPO = "CHANGE_ME/QGIS_Node_TopologyChecker"   # <-- แก้เป็น owner/repo ของคุณ
+# ---- ค่า repository ของโครงการ (ฝังตายตัว ผู้ใช้ทั่วไปไม่ต้องตั้งค่า) ----------
+DEFAULT_REPO = "PARKPHUM/CHK_Node-Topo"
 DEFAULT_BRANCH = "main"
-
-_SETTINGS_REPO = "plugins/node_topology_checker/github_repo"
-_SETTINGS_BRANCH = "plugins/node_topology_checker/github_branch"
 
 _HTTP_TIMEOUT = 20  # วินาที
 _USER_AGENT = "QGIS-Node-Topology-Checker"
 
 
 # ===================================================================
-# การตั้งค่า repo/branch
+# repo/branch — ใช้ค่าคงที่ที่ฝังไว้เสมอ (ปุ่มตั้งค่าถูกตัดออกแล้ว)
 # ===================================================================
 def get_repo():
-    return QgsSettings().value(_SETTINGS_REPO, DEFAULT_REPO, type=str)
-
-
-def set_repo(repo):
-    QgsSettings().setValue(_SETTINGS_REPO, (repo or "").strip())
+    return DEFAULT_REPO
 
 
 def get_branch():
-    return QgsSettings().value(_SETTINGS_BRANCH, DEFAULT_BRANCH, type=str)
-
-
-def set_branch(branch):
-    QgsSettings().setValue(_SETTINGS_BRANCH, (branch or DEFAULT_BRANCH).strip())
+    return DEFAULT_BRANCH
 
 
 def is_repo_configured():

@@ -23,7 +23,6 @@ from qgis.PyQt.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QProgressBar,
@@ -75,6 +74,7 @@ class TopologyCheckerDock(QgsDockWidget):
         self.update_task = None     # งานตรวจสอบเวอร์ชัน
         self.install_task = None    # งานติดตั้งอัปเดต
         self._result_crs = None
+        self._last_transform_drops = 0
 
         self._build_ui()
 
@@ -107,20 +107,36 @@ class TopologyCheckerDock(QgsDockWidget):
         setting_group = QGroupBox("ตั้งค่าการตรวจสอบ")
         sv = QVBoxLayout(setting_group)
 
+        # ค่าคลาดเคลื่อนสำหรับ Overlap/Gap (กรองเศษ sliver)
         tol_row = QHBoxLayout()
-        tol_row.addWidget(QLabel("ค่าความคลาดเคลื่อน (Tolerance):"))
+        tol_row.addWidget(QLabel("ค่าคลาดเคลื่อน Overlap/Gap:"))
         self.tolerance_spin = QDoubleSpinBox()
         self.tolerance_spin.setDecimals(6)
         self.tolerance_spin.setRange(0.0, 1000000.0)
         self.tolerance_spin.setSingleStep(0.001)
         self.tolerance_spin.setValue(0.005)
         self.tolerance_spin.setToolTip(
-            "เศษทับซ้อน/ช่องว่างที่บางกว่าค่านี้จะไม่ถูกรายงาน (แก้ปัญหา false positive)\n"
-            "และใช้เป็นระยะยอมรับว่า Vertex ตรงกับหมุด POINT")
+            "เศษทับซ้อน/ช่องว่างที่บางกว่าค่านี้จะไม่ถูกรายงาน (แก้ปัญหา false positive)")
         tol_row.addWidget(self.tolerance_spin)
         tol_row.addWidget(QLabel("หน่วยแผนที่"))
         tol_row.addStretch(1)
         sv.addLayout(tol_row)
+
+        # ระยะยอมรับสำหรับการตรวจ Node/หมุด (แยกต่างหาก เพราะหมุดมักห่าง vertex มากกว่าเศษ sliver)
+        node_tol_row = QHBoxLayout()
+        node_tol_row.addWidget(QLabel("ระยะยอมรับหมุด (Node):"))
+        self.node_tolerance_spin = QDoubleSpinBox()
+        self.node_tolerance_spin.setDecimals(4)
+        self.node_tolerance_spin.setRange(0.0, 1000000.0)
+        self.node_tolerance_spin.setSingleStep(0.01)
+        self.node_tolerance_spin.setValue(0.10)
+        self.node_tolerance_spin.setToolTip(
+            "ถ้ามีหมุด POINT อยู่ห่าง vertex ไม่เกินค่านี้ ถือว่า \"ตรงกัน\"\n"
+            "ดู \"ระยะถึงหมุดใกล้สุด\" ในตารางผลลัพธ์ แล้วตั้งค่านี้ให้สูงกว่าระยะที่ยอมรับได้")
+        node_tol_row.addWidget(self.node_tolerance_spin)
+        node_tol_row.addWidget(QLabel("หน่วยแผนที่"))
+        node_tol_row.addStretch(1)
+        sv.addLayout(node_tol_row)
 
         scope_row = QHBoxLayout()
         scope_row.addWidget(QLabel("ขอบเขต:"))
@@ -193,10 +209,7 @@ class TopologyCheckerDock(QgsDockWidget):
         upd_row = QHBoxLayout()
         self.btn_update = QPushButton("ตรวจสอบอัปเดตปลั๊กอิน")
         self.btn_update.clicked.connect(self.on_check_update)
-        self.btn_settings = QPushButton("ตั้งค่า GitHub")
-        self.btn_settings.clicked.connect(self.on_github_settings)
         upd_row.addWidget(self.btn_update)
-        upd_row.addWidget(self.btn_settings)
         upd_row.addStretch(1)
         root.addLayout(upd_row)
 
@@ -237,6 +250,7 @@ class TopologyCheckerDock(QgsDockWidget):
             return
 
         tolerance = self.tolerance_spin.value()
+        node_tolerance = self.node_tolerance_spin.value()
 
         # เตรียม request ตามขอบเขต
         poly_request = QgsFeatureRequest()
@@ -267,16 +281,36 @@ class TopologyCheckerDock(QgsDockWidget):
             except Exception:  # noqa: BLE001
                 pass
             if self.scope_window.isChecked():
-                rect = self._canvas_rect_in_crs(point_layer.crs())
+                # สำคัญ: กรองหมุดด้วย "ขอบเขตของแปลงที่ถูกดึงมาตรวจ" ไม่ใช่กรอบหน้าต่าง
+                # เพราะแปลงที่คาบเกี่ยวขอบหน้าต่างมี vertex อยู่นอกกรอบ — ถ้ากรองหมุด
+                # ด้วยกรอบหน้าต่าง หมุดของ vertex เหล่านั้นจะหายไปและถูกฟ้องผิด
+                rect = self._features_extent(
+                    polygon_features, margin=max(node_tolerance * 2.0, 1.0))
+                if rect is not None and point_layer.crs() != poly_layer.crs():
+                    try:
+                        back = QgsCoordinateTransform(
+                            poly_layer.crs(), point_layer.crs(), QgsProject.instance())
+                        rect = back.transformBoundingBox(rect)
+                    except Exception:  # noqa: BLE001
+                        rect = None  # แปลงกรอบไม่ได้ -> ไม่กรอง (ดึงหมุดทั้งหมด ปลอดภัยกว่า)
                 if rect is not None:
                     pt_request.setFilterRect(rect)
             point_features = self._extract_features(point_layer, pt_request, transform)
+
+            # แจ้งเตือนกรณีหมุดหายทั้งหมด (เช่น แปลง CRS ไม่สำเร็จ) เพื่อไม่ให้ผลตรวจหลอก
+            if self._last_transform_drops > 0:
+                self._warn("หมุด POINT จำนวน {} จุด แปลงพิกัด (CRS) ไม่สำเร็จ และถูกข้าม "
+                           "— ผลตรวจ Node อาจฟ้องเกินจริง".format(self._last_transform_drops))
+            if not point_features:
+                self._warn("ไม่พบหมุด POINT ในขอบเขตที่ตรวจ — ทุก Vertex จะถูกรายงานว่าไม่ตรง "
+                           "(ตรวจสอบชั้นข้อมูล POINT และ CRS)")
 
         self._result_crs = poly_layer.crs()
 
         # เริ่มงาน background
         self.task = TopologyCheckTask(
-            polygon_features, point_features, tolerance, do_overlap, do_gap, do_node)
+            polygon_features, point_features, tolerance, node_tolerance,
+            do_overlap, do_gap, do_node)
         self.task.set_callback(self.on_check_finished)
         # ใช้ bound method เพื่อให้ Qt เลือก QueuedConnection อัตโนมัติ (progress มาจาก worker thread)
         self.task.progressChanged.connect(self._on_task_progress)
@@ -407,9 +441,10 @@ class TopologyCheckerDock(QgsDockWidget):
             return
         if not update_checker.is_repo_configured():
             QMessageBox.information(
-                self, "ยังไม่ได้ตั้งค่า GitHub",
-                "กรุณากดปุ่ม \"ตั้งค่า GitHub\" เพื่อระบุ repository ก่อน\n"
-                "รูปแบบ: owner/repository เช่น phakphum/QGIS_Node_TopologyChecker")
+                self, "ยังไม่ได้ตั้งค่า repository",
+                "ระบบอัปเดตยังไม่ได้กำหนด GitHub repository\n"
+                "ผู้ดูแลต้องแก้ค่า DEFAULT_REPO ในไฟล์ update_checker.py "
+                "ให้เป็น owner/repository ของโครงการ")
             return
 
         self.btn_update.setEnabled(False)
@@ -475,33 +510,17 @@ class TopologyCheckerDock(QgsDockWidget):
                 "ไม่สามารถติดตั้งอัปเดตได้\n\nรายละเอียด: {}".format(
                     task.error_message or "ไม่ทราบสาเหตุ"))
 
-    def on_github_settings(self):
-        current_repo = update_checker.get_repo()
-        repo, ok = QInputDialog.getText(
-            self, "ตั้งค่า GitHub repository",
-            "ระบุ repository (owner/repository):", text=current_repo)
-        if not ok:
-            return
-        update_checker.set_repo(repo)
-
-        current_branch = update_checker.get_branch()
-        branch, ok2 = QInputDialog.getText(
-            self, "ตั้งค่า Branch",
-            "ระบุ branch หลัก (ปล่อยว่างได้ ระบบจะลอง main/master ให้):",
-            text=current_branch)
-        if ok2:
-            update_checker.set_branch(branch)
-
-        self.iface.messageBar().pushMessage(
-            "บันทึกแล้ว", "ตั้งค่า GitHub: {}".format(update_checker.get_repo()),
-            level=Qgis.Info, duration=4)
-
     # ==================================================================
     # ตัวช่วย
     # ==================================================================
     def _extract_features(self, layer, request, transform=None):
-        """ดึง (fid, QgsGeometry) ออกจาก layer (คัดลอก geometry ออกมา แปลง CRS ถ้าจำเป็น)"""
+        """ดึง (fid, QgsGeometry) ออกจาก layer (คัดลอก geometry ออกมา แปลง CRS ถ้าจำเป็น)
+
+        นับจำนวน feature ที่แปลงพิกัดไม่สำเร็จไว้ใน self._last_transform_drops
+        เพื่อให้ผู้เรียกแจ้งเตือนได้ (การทิ้งเงียบ ๆ ทำให้ผลตรวจ Node หลอก)
+        """
         out = []
+        self._last_transform_drops = 0
         for feat in layer.getFeatures(request):
             geom = feat.geometry()
             if geom is None or geom.isEmpty():
@@ -511,9 +530,23 @@ class TopologyCheckerDock(QgsDockWidget):
                 try:
                     g.transform(transform)
                 except Exception:  # noqa: BLE001
+                    self._last_transform_drops += 1
                     continue
             out.append((feat.id(), g))
         return out
+
+    def _features_extent(self, features, margin):
+        """คืนกรอบรวมของ features [(fid, geom)] ขยายขอบด้วย margin (หน่วยแผนที่)"""
+        rect = None
+        for _fid, geom in features:
+            bb = geom.boundingBox()
+            if rect is None:
+                rect = QgsRectangle(bb)
+            else:
+                rect.combineExtentWith(bb)
+        if rect is not None:
+            rect.grow(margin)
+        return rect
 
     def _canvas_rect_in_crs(self, dest_crs):
         """คืนกรอบมุมมองแผนที่ปัจจุบัน แปลงเข้าสู่ CRS ที่ต้องการ"""
