@@ -113,6 +113,10 @@ class ResultLayerManager:
         layer.updateExtents()
         self._apply_red_style(layer, geom_type)
 
+        # ชั้น Node (จุดไม่ตรงหมุด) ตั้งความโปร่งใสไว้ 40% ตามที่ผู้ใช้ต้องการ
+        if key == "node":
+            layer.setOpacity(0.4)
+
         layer.setCustomProperty(MARKER_PROPERTY, True)
         QgsProject.instance().addMapLayer(layer)
         self._layer_ids.append(layer.id())

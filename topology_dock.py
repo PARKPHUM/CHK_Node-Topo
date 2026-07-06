@@ -14,11 +14,8 @@ import os
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -60,6 +57,11 @@ TYPE_LABEL = {
 }
 
 GEOM_ROLE = Qt.UserRole + 1
+
+# ค่า tolerance ตายตัว (หน่วยเมตร) — งานอยู่บน CRS หน่วยเมตร เช่น EPSG:24047 UTM Zone 47N
+# ตั้งเป็นค่า default ในโค้ด จึงไม่ต้องมีช่องกรอกบนหน้าต่าง
+DEFAULT_TOLERANCE = 0.001       # ค่าคลาดเคลื่อน Overlap/Gap
+DEFAULT_NODE_TOLERANCE = 0.001  # ระยะยอมรับหมุด (Node)
 
 # ==================================================================
 # ชุดสี/สไตล์ — โทน Bootstrap ให้เข้าชุดกับปลั๊กอิน Filter_PATH
@@ -120,34 +122,10 @@ QGroupBox::title {
     color: #007bff;
 }
 
-QComboBox {
-    font-size: 10pt;
-    color: #333;
-    background-color: #ffffff;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    padding: 3px 6px;
-    min-height: 24px;
-}
-QComboBox:focus { border: 1px solid #007bff; }
-QComboBox QAbstractItemView {
-    background-color: #ffffff;
-    color: #333;
-    border: 1px solid #ccc;
-    selection-background-color: #007bff;
-    selection-color: #ffffff;
-}
-
-QDoubleSpinBox {
-    font-size: 11pt;
-    color: #333;
-    background-color: #ffffff;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    padding: 4px 6px;
-    min-height: 22px;
-}
-QDoubleSpinBox:focus { border: 1px solid #007bff; }
+/* Dropdown ใช้สไตล์เดียวกับ Filter_PATH เป๊ะ ๆ:
+   กำหนดแค่ font/padding/min-height เท่านั้น ปล่อยให้เป็น combobox แบบ native
+   (ไม่ตีกรอบ ไม่ทำลูกศรเอง) จะได้ลูกศร ▼ แบบเรียบ ไม่มีกรอบสี่เหลี่ยมครอบ */
+QComboBox { font-size: 10pt; padding: 3px; min-height: 24px; }
 
 QCheckBox, QRadioButton { font-size: 10pt; font-weight: bold; color: #333; spacing: 7px; padding: 2px 0; }
 
@@ -235,45 +213,10 @@ class TopologyCheckerDock(QgsDockWidget):
         root.addWidget(layer_group)
 
         # ---- กลุ่ม: ตั้งค่าการตรวจสอบ ----
+        # ค่า tolerance ใช้ค่า default ตายตัวในโค้ด (Overlap/Gap = Node = 0.001 ม.)
+        # จึงไม่มีช่องกรอกบนหน้าต่าง เพื่อให้พื้นที่ตารางผลลัพธ์สูงขึ้น
         setting_group = QGroupBox("ตั้งค่าการตรวจสอบ")
         sv = QVBoxLayout(setting_group)
-
-        # ค่าคลาดเคลื่อนสำหรับ Overlap/Gap (กรองเศษ sliver)
-        tol_row = QHBoxLayout()
-        tol_row.addWidget(QLabel("ค่าคลาดเคลื่อน Overlap/Gap:"))
-        self.tolerance_spin = QDoubleSpinBox()
-        self.tolerance_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)  # ช่องกรอกธรรมดา ไม่มีลูกศรขึ้น/ลง
-        self.tolerance_spin.setDecimals(6)
-        self.tolerance_spin.setRange(0.0, 1000000.0)
-        self.tolerance_spin.setSingleStep(0.001)
-        self.tolerance_spin.setValue(0.005)
-        self.tolerance_spin.setMinimumWidth(130)
-        self.tolerance_spin.setToolTip(
-            "เศษทับซ้อน/ช่องว่างที่บางกว่าค่านี้จะไม่ถูกรายงาน (แก้ปัญหา false positive)")
-        tol_row.addWidget(self.tolerance_spin)
-        self.tol_unit_label = QLabel("หน่วยแผนที่")
-        tol_row.addWidget(self.tol_unit_label)
-        tol_row.addStretch(1)
-        sv.addLayout(tol_row)
-
-        # ระยะยอมรับสำหรับการตรวจ Node/หมุด (แยกต่างหาก เพราะหมุดมักห่าง vertex มากกว่าเศษ sliver)
-        node_tol_row = QHBoxLayout()
-        node_tol_row.addWidget(QLabel("ระยะยอมรับหมุด (Node):"))
-        self.node_tolerance_spin = QDoubleSpinBox()
-        self.node_tolerance_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)  # ช่องกรอกธรรมดา ไม่มีลูกศรขึ้น/ลง
-        self.node_tolerance_spin.setDecimals(4)
-        self.node_tolerance_spin.setRange(0.0, 1000000.0)
-        self.node_tolerance_spin.setSingleStep(0.01)
-        self.node_tolerance_spin.setValue(0.10)
-        self.node_tolerance_spin.setMinimumWidth(130)
-        self.node_tolerance_spin.setToolTip(
-            "ถ้ามีหมุด POINT อยู่ห่าง vertex ไม่เกินค่านี้ ถือว่า \"ตรงกัน\"\n"
-            "ดูคอลัมน์ \"ระยะห่าง\" ในตารางผลลัพธ์ แล้วตั้งค่านี้ให้สูงกว่าระยะที่ยอมรับได้")
-        node_tol_row.addWidget(self.node_tolerance_spin)
-        self.node_unit_label = QLabel("หน่วยแผนที่")
-        node_tol_row.addWidget(self.node_unit_label)
-        node_tol_row.addStretch(1)
-        sv.addLayout(node_tol_row)
 
         scope_row = QHBoxLayout()
         scope_row.addWidget(QLabel("ขอบเขต:"))
@@ -363,10 +306,6 @@ class TopologyCheckerDock(QgsDockWidget):
         upd_row.addStretch(1)
         root.addLayout(upd_row)
 
-        # อัปเดตป้ายหน่วย (เมตร/องศา) ตาม CRS ของชั้น POLYGON ที่เลือก
-        self.polygon_combo.layerChanged.connect(self._update_unit_labels)
-        self._update_unit_labels()
-
         self.setWidget(container)
 
     # ==================================================================
@@ -395,8 +334,8 @@ class TopologyCheckerDock(QgsDockWidget):
             self._warn("การตรวจ Node ต้องเลือกชั้นข้อมูล POINT ด้วย")
             return
 
-        tolerance = self.tolerance_spin.value()
-        node_tolerance = self.node_tolerance_spin.value()
+        tolerance = DEFAULT_TOLERANCE
+        node_tolerance = DEFAULT_NODE_TOLERANCE
 
         # เตรียม request ตามขอบเขต
         poly_request = QgsFeatureRequest()
@@ -554,23 +493,6 @@ class TopologyCheckerDock(QgsDockWidget):
         if crs is not None and crs.mapUnits() == QgsUnitTypes.DistanceFeet:
             return "ฟุต", "ตร.ฟุต"
         return "หน่วย", "ตร.หน่วย"
-
-    def _update_unit_labels(self):
-        """ปรับป้าย 'หน่วยแผนที่' ให้บอกหน่วยจริงของชั้น POLYGON ที่เลือก"""
-        layer = self.polygon_combo.currentLayer()
-        if layer is None:
-            text = "หน่วยแผนที่"
-        else:
-            u = layer.crs().mapUnits()
-            names = {
-                QgsUnitTypes.DistanceMeters: "เมตร",
-                QgsUnitTypes.DistanceKilometers: "กิโลเมตร",
-                QgsUnitTypes.DistanceFeet: "ฟุต",
-                QgsUnitTypes.DistanceDegrees: "องศา (ไม่แนะนำ — ควรใช้ CRS หน่วยเมตร)",
-            }
-            text = names.get(u, "หน่วยแผนที่")
-        self.tol_unit_label.setText(text)
-        self.node_unit_label.setText(text)
 
     def on_row_double_clicked(self, row, _column):
         type_item = self.table.item(row, 0)
