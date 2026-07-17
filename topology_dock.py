@@ -682,18 +682,37 @@ class TopologyCheckerDock(QgsDockWidget):
             box.setIcon(QMessageBox.Information)
             box.setWindowTitle("พบเวอร์ชันใหม่")
             box.setText(
-                "พบเวอร์ชันใหม่: {}\nเวอร์ชันปัจจุบันของคุณ: {}".format(
+                "🎉 พบเวอร์ชันใหม่บน GitHub แล้ว!\n\n"
+                "เวอร์ชันใหม่ : {}\n"
+                "เวอร์ชันของคุณ : {}\n\n"
+                "ต้องการดาวน์โหลดและติดตั้งเลยหรือไม่?\n"
+                "(หลังติดตั้งเสร็จ ต้องปิดและเปิด QGIS ใหม่)".format(
                     task.remote_version, task.local_version))
-            btn_update = box.addButton("อัปเดต", QMessageBox.AcceptRole)
-            box.addButton("ยกเลิก", QMessageBox.RejectRole)
+            btn_update = box.addButton("อัปเดตเลย", QMessageBox.AcceptRole)
+            box.addButton("ไว้ก่อน", QMessageBox.RejectRole)
+            box.setDefaultButton(btn_update)
             box.exec_()
 
             if box.clickedButton() == btn_update:
                 self._start_install(task.resolved_branch)
+        elif (update_checker.parse_version(task.local_version)
+                > update_checker.parse_version(task.remote_version)):
+            # เครื่องนักพัฒนา: โค้ดในเครื่องใหม่กว่าที่ push ขึ้น GitHub
+            # (แยกข้อความออกมา ไม่งั้นจะอ่านว่า "ล่าสุดแล้ว" ทั้งที่ยังไม่ได้เผยแพร่)
+            QMessageBox.information(
+                self, "เวอร์ชันในเครื่องใหม่กว่า GitHub",
+                "ไม่มีอะไรให้อัปเดต — เครื่องคุณใหม่กว่าบน GitHub\n\n"
+                "เวอร์ชันในเครื่อง : {}\n"
+                "เวอร์ชันบน GitHub : {}\n\n"
+                "ถ้าต้องการเผยแพร่เวอร์ชันนี้ ให้ commit + push ขึ้น GitHub ก่อน".format(
+                    task.local_version, task.remote_version))
         else:
             QMessageBox.information(
                 self, "ใช้เวอร์ชันล่าสุดแล้ว",
-                "คุณกำลังใช้ปลั๊กอินเวอร์ชันล่าสุดแล้ว ({})".format(task.local_version))
+                "คุณกำลังใช้ปลั๊กอินเวอร์ชันล่าสุดแล้ว ✔\n\n"
+                "เวอร์ชันในเครื่อง : {}\n"
+                "เวอร์ชันบน GitHub : {}".format(
+                    task.local_version, task.remote_version))
 
     def _start_install(self, branch):
         self.install_task = update_checker.UpdateInstallTask(PLUGIN_DIR, branch)
@@ -708,10 +727,17 @@ class TopologyCheckerDock(QgsDockWidget):
         self.install_task = None
 
         if success:
-            QMessageBox.information(
-                self, "อัปเดตเสร็จแล้ว",
-                "ดาวน์โหลดและติดตั้งเวอร์ชันใหม่เรียบร้อย\n\n"
-                "กรุณาปิดและเปิด QGIS ใหม่ เพื่อเริ่มใช้งานเวอร์ชันล่าสุด")
+            # ใช้ไอคอนเตือน (ไม่ใช่ information) เพราะถ้าไม่รีสตาร์ท
+            # ปลั๊กอินจะยังรันโค้ดเดิมในหน่วยความจำ — ผู้ใช้มักพลาดจุดนี้
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("อัปเดตเสร็จแล้ว — ต้องปิด/เปิด QGIS ใหม่")
+            box.setText(
+                "ดาวน์โหลดและติดตั้งเวอร์ชันใหม่เรียบร้อยแล้ว ✔\n\n"
+                "⚠ กรุณา \"ปิดโปรแกรม QGIS แล้วเปิดใหม่\" ตอนนี้\n\n"
+                "เวอร์ชันใหม่จะเริ่มทำงานหลังเปิด QGIS ใหม่เท่านั้น\n"
+                "ถ้ายังไม่ปิด/เปิดใหม่ ปลั๊กอินจะยังทำงานด้วยโค้ดเวอร์ชันเดิมอยู่")
+            box.exec_()
         else:
             QMessageBox.warning(
                 self, "อัปเดตไม่สำเร็จ",
