@@ -3,7 +3,7 @@ name=Node & Topology Checker
 qgisMinimumVersion=3.28
 description=ตรวจสอบ Topology (Gap/Overlap) แบบมีค่า Tolerance และตรวจสอบ Node/Vertex ของ POLYGON ที่ไม่ตรงกับ POINT
 about=ปลั๊กอินสำหรับตรวจสอบคุณภาพข้อมูลรังวัด/แปลงที่ดิน ตรวจการทับซ้อน (Overlap) และช่องว่าง (Gap) ของ POLYGON แบบมีค่าความคลาดเคลื่อน (Tolerance) เพื่อลด false positive จากเศษ sliver และตรวจสอบว่า vertex ของ POLYGON ตรงกับหมุด POINT หรือไม่ พร้อมระบบตรวจสอบเวอร์ชัน/อัปเดตผ่าน GitHub
-version=1.0.9
+version=1.0.10
 author=นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
 email=poonza2538@gmail.com
 
@@ -23,6 +23,9 @@ deprecated=False
 tags=topology,overlap,gap,node,vertex,cadastre,quality,ตรวจสอบ,รังวัด,แปลงที่ดิน
 
 changelog=
+    1.0.10 - เครื่องมือวาดเส้น: ปรับความหนาเส้นเป็น 0.8 (จากเดิม 4),
+            เปิด snapping แบบ Vertex ให้อัตโนมัติตอนกดวาดเส้น — เคอร์เซอร์ดูดเข้าหา
+            มุม/หมุดของทุกชั้น พร้อมแสดงตัวชี้ตำแหน่ง (snap indicator) ระยะ 12 พิกเซล
     1.0.9 - เพิ่มเครื่องมือ "วาดเส้น": ปุ่มสร้าง Layer เส้น (สีเหลือง หนา ~4) แบบมีได้ชั้นเดียว
             และปุ่มวาดเส้นเพื่อ digitize feature (คลิกขวาเพื่อจบเส้น วาดได้หลายเส้น),
             เอาชั้นผลลัพธ์สีแดง (Overlap/Gap/Node) ออก เหลือตารางผลลัพธ์ + ดับเบิลคลิกซูม/ไฮไลต์,

@@ -42,6 +42,8 @@ from qgis.core import (
     QgsMapLayerProxyModel,
     QgsProject,
     QgsRectangle,
+    QgsSnappingConfig,
+    QgsTolerance,
     QgsUnitTypes,
     QgsVectorLayer,
     QgsVectorLayerFeatureSource,
@@ -231,7 +233,8 @@ class TopologyCheckerDock(QgsDockWidget):
         self.btn_draw_line.clicked.connect(self.on_draw_line)
         self.btn_draw_line.setEnabled(False)
         self.btn_draw_line.setToolTip(
-            "คลิกซ้ายเพื่อลงจุด, คลิกขวาเพื่อจบเส้น (วาดได้หลายเส้น)")
+            "คลิกซ้ายเพื่อลงจุด, คลิกขวาเพื่อจบเส้น (วาดได้หลายเส้น)\n"
+            "เปิด snapping แบบ Vertex ให้อัตโนมัติ — เคอร์เซอร์จะดูดเข้าหามุม/หมุด")
         lg.addWidget(self.btn_new_line, 1)
         lg.addWidget(self.btn_draw_line, 1)
         root.addWidget(line_group)
@@ -495,10 +498,10 @@ class TopologyCheckerDock(QgsDockWidget):
         if project_crs and project_crs.isValid():
             layer.setCrs(project_crs)
 
-        # สไตล์เส้นสีเหลือง หนา ~4
+        # สไตล์เส้นสีเหลือง หนา 0.8
         symbol = QgsLineSymbol.createSimple({
             "line_color": "255,255,0,255",
-            "line_width": "4",
+            "line_width": "0.8",
             "capstyle": "round",
             "joinstyle": "round",
         })
@@ -520,8 +523,25 @@ class TopologyCheckerDock(QgsDockWidget):
             "กด '✎ วาดเส้น' เพื่อเริ่มวาด (คลิกขวาเพื่อจบเส้น)",
             level=Qgis.Info, duration=5)
 
+    def _enable_vertex_snapping(self):
+        """เปิด snapping แบบ Vertex ทุกชั้น — เคอร์เซอร์จะดูดเข้าหามุม/หมุด
+        และ QGIS จะวาดตัวชี้ (snap indicator) ตรงตำแหน่ง vertex ที่จะ snap ให้เอง
+        """
+        project = QgsProject.instance()
+        config = project.snappingConfig()
+        config.setEnabled(True)
+        config.setMode(QgsSnappingConfig.AllLayers)
+        # QGIS ใหม่ใช้ flag enum (setTypeFlag) ส่วนรุ่นเก่าใช้ setType
+        try:
+            config.setTypeFlag(QgsSnappingConfig.VertexFlag)
+        except (AttributeError, TypeError):
+            config.setType(QgsSnappingConfig.Vertex)
+        config.setTolerance(12)
+        config.setUnits(QgsTolerance.Pixels)
+        project.setSnappingConfig(config)
+
     def on_draw_line(self):
-        """เริ่มวาดเส้นลงในชั้นเส้น: เปิด editing + เครื่องมือ Add Feature ของ QGIS"""
+        """เริ่มวาดเส้นลงในชั้นเส้น: เปิด snapping + editing + เครื่องมือ Add Feature"""
         layer = self._line_layer()
         if layer is None:
             self.line_layer_id = None
@@ -529,6 +549,11 @@ class TopologyCheckerDock(QgsDockWidget):
             self._warn("กรุณาสร้าง Layer เส้นก่อน")
             return
 
+        # เปิด snapping ก่อน เพื่อให้เคอร์เซอร์ดูดเข้าหา vertex พร้อมตัวชี้ตำแหน่ง
+        try:
+            self._enable_vertex_snapping()
+        except Exception:  # noqa: BLE001 - ตั้ง snapping ไม่ได้ ก็ยังวาดเส้นได้ตามปกติ
+            pass
         self.iface.setActiveLayer(layer)
         if not layer.isEditable():
             layer.startEditing()
