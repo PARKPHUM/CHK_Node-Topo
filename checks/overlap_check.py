@@ -7,10 +7,15 @@ overlap_check.py — ตรวจหาการทับซ้อน (Overlap) 
   - นับเฉพาะ "ส่วนที่เป็นพื้นที่" ของ intersection (ขอบที่แชร์กัน = เส้น ไม่ถือเป็น overlap)
   - กรองเศษ sliver ที่บางกว่า tolerance ทิ้ง (is_significant)
 
+การเร่งความเร็ว (สำคัญกับข้อมูลจากฐานข้อมูลที่มีแปลงจำนวนมาก):
+  - QgsSpatialIndex กรองคู่ที่ bbox ไม่ชนกันออกก่อน
+  - เทียบเฉพาะคู่ fid_a < fid_b — ไม่ต้องเก็บ set ของคู่ที่เช็กแล้ว (ลดหน่วยความจำ)
+  - ใช้ prepared geometry (QgsGeometryEngine) ทดสอบ intersects กับเพื่อนบ้านหลายตัว
+
 ผู้พัฒนา : นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
 """
 
-from qgis.core import QgsFeature, QgsSpatialIndex
+from qgis.core import QgsFeature, QgsGeometry, QgsSpatialIndex
 
 from .geometry_utils import clean_polygon, polygonal_part, is_significant
 
@@ -46,29 +51,30 @@ def find_overlaps(features, tolerance, feedback=None):
         index.addFeature(feat)
 
     results = []
-    checked_pairs = set()
     total = max(len(geoms), 1)
-    done = 0
+    step = max(1, total // 100)
 
-    for fid_a, geom_a in geoms.items():
-        if _canceled(feedback):
-            break
-        done += 1
-        _set_progress(feedback, 100.0 * done / total)
+    for done, (fid_a, geom_a) in enumerate(geoms.items()):
+        if done % step == 0:
+            if _canceled(feedback):
+                break
+            _set_progress(feedback, 100.0 * done / total)
 
-        candidates = index.intersects(geom_a.boundingBox())
+        # ทุกคู่ถูกพิจารณาครั้งเดียวจากฝั่ง fid ที่น้อยกว่า (bbox ชนกันเป็นสมมาตร)
+        candidates = [fid_b for fid_b in index.intersects(geom_a.boundingBox())
+                      if fid_b > fid_a]
+        if not candidates:
+            continue
+
+        # prepared geometry: เร็วขึ้นมากเมื่อ geom_a ถูกเทียบกับเพื่อนบ้านหลายตัว
+        engine = QgsGeometry.createGeometryEngine(geom_a.constGet())
+        engine.prepareGeometry()
+
         for fid_b in candidates:
-            if fid_b == fid_a:
-                continue
-            key = (fid_a, fid_b) if fid_a < fid_b else (fid_b, fid_a)
-            if key in checked_pairs:
-                continue
-            checked_pairs.add(key)
-
             geom_b = geoms.get(fid_b)
             if geom_b is None:
                 continue
-            if not geom_a.intersects(geom_b):
+            if not engine.intersects(geom_b.constGet()):
                 continue
 
             inter = geom_a.intersection(geom_b)
@@ -82,10 +88,11 @@ def find_overlaps(features, tolerance, feedback=None):
             results.append({
                 "type": "overlap",
                 "geometry": poly,
-                "fids": key,
+                "fids": (fid_a, fid_b),
                 "area": poly.area(),
                 "detail": "แปลง FID {} ทับซ้อน FID {} (พื้นที่ {:.4f})".format(
-                    key[0], key[1], poly.area()),
+                    fid_a, fid_b, poly.area()),
             })
 
+    _set_progress(feedback, 100.0)
     return results

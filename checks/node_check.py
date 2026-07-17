@@ -19,6 +19,7 @@ from qgis.core import (
     QgsFeature,
     QgsGeometry,
     QgsPointXY,
+    QgsRectangle,
     QgsSpatialIndex,
 )
 
@@ -81,16 +82,19 @@ def find_unmatched_vertices(polygon_features, point_features, tolerance, feedbac
         index.addFeature(feat)
 
     tol = float(tolerance)
+    tol_sq = tol * tol
     results = []
     seen = set()  # กันรายงานพิกัดซ้ำ (เช่น มุมที่แชร์กันระหว่างสองแปลง)
 
     poly_list = list(polygon_features)
     total = max(len(poly_list), 1)
+    step = max(1, total // 100)  # throttle: ยิง progress ~100 ครั้งพอ ไม่ยิงทุก feature
 
     for i, (fid, geom) in enumerate(poly_list):
-        if _canceled(feedback):
-            break
-        _set_progress(feedback, 100.0 * (i + 1) / total)
+        if i % step == 0:
+            if _canceled(feedback):
+                break
+            _set_progress(feedback, 100.0 * i / total)
         if geom is None or geom.isEmpty():
             continue
 
@@ -101,9 +105,23 @@ def find_unmatched_vertices(polygon_features, point_features, tolerance, feedbac
                 continue
             seen.add(key)
 
-            nearest = _nearest_distance(index, point_coords, x, y)
-            if nearest is not None and nearest <= tol:
+            # เช็กเร็ว: มีหมุดในกรอบ ±tol และระยะจริง <= tol หรือไม่
+            # (vertex ส่วนใหญ่ควร match — จ่ายค่า nearestNeighbor เฉพาะตัวที่ไม่ match)
+            matched = False
+            for pid in index.intersects(QgsRectangle(x - tol, y - tol, x + tol, y + tol)):
+                for (px, py) in point_coords.get(pid, ()):
+                    dx = px - x
+                    dy = py - y
+                    if dx * dx + dy * dy <= tol_sq:
+                        matched = True
+                        break
+                if matched:
+                    break
+            if matched:
                 continue  # มีหมุดอยู่ในระยะยอมรับ = ตรงกัน
+
+            # ไม่ match — หาระยะถึงหมุดใกล้สุดไว้รายงาน (ช่วยผู้ใช้ตั้งค่า tolerance)
+            nearest = _nearest_distance(index, point_coords, x, y)
 
             if nearest is None:
                 detail = "แปลง FID {} มี Vertex ไม่มีหมุดใกล้เคียง ที่ ({:.3f}, {:.3f})".format(
@@ -124,4 +142,5 @@ def find_unmatched_vertices(polygon_features, point_features, tolerance, feedbac
                 "detail": detail,
             })
 
+    _set_progress(feedback, 100.0)
     return results

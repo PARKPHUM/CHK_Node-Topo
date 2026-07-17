@@ -3,8 +3,8 @@
 topology_dock.py — หน้าต่าง (Dock) หลักของปลั๊กอิน สร้าง UI ด้วยโค้ด (ภาษาไทย)
 
 รวมทุกฟีเจอร์: เลือกชั้น POINT/POLYGON, ตั้ง tolerance, เลือกขอบเขต (ทั้งหมด/หน้าต่าง),
-เลือกรายการตรวจ (Overlap/Gap/Node), แสดงผลสีแดง + ตารางผลลัพธ์ (คลิกซูม),
-และปุ่มตรวจสอบ/อัปเดตปลั๊กอินจาก GitHub
+เลือกรายการตรวจ (Overlap/Gap/Node), ตารางผลลัพธ์ (ดับเบิลคลิกเพื่อซูม+ไฮไลต์กะพริบ),
+เครื่องมือวาดเส้น (สร้าง Layer เส้น + digitize) และปุ่มตรวจสอบ/อัปเดตปลั๊กอินจาก GitHub
 
 ผู้พัฒนา : นายภาคภูมิ สูบกำปัง (วิศวกรรังวัดปฏิบัติการ กองเทคโนโลยีทำแผนที่)
 """
@@ -35,17 +35,20 @@ from qgis.core import (
     Qgis,
     QgsApplication,
     QgsCoordinateTransform,
+    QgsEditFormConfig,
     QgsFeatureRequest,
     QgsGeometry,
+    QgsLineSymbol,
     QgsMapLayerProxyModel,
     QgsProject,
     QgsRectangle,
     QgsUnitTypes,
+    QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
 )
 from qgis.gui import QgsDockWidget, QgsMapLayerComboBox
 
 from .check_task import TopologyCheckTask
-from .result_layers import ResultLayerManager
 from . import update_checker
 
 PLUGIN_DIR = os.path.dirname(__file__)
@@ -85,6 +88,8 @@ BTN_RED = _BTN_BASE.format(bg="#dc3545", hover="#e15361", pressed="#bd2130")
 BTN_BLUE = _BTN_BASE.format(bg="#007bff", hover="#268fff", pressed="#0062cc")
 # ปุ่ม "ล้างผลลัพธ์" — สีเทา
 BTN_GRAY = _BTN_BASE.format(bg="#6c757d", hover="#828a91", pressed="#5a6268")
+# ปุ่ม "สร้าง Layer เส้น" — สีเขียว (Bootstrap success)
+BTN_GREEN = _BTN_BASE.format(bg="#28a745", hover="#34ce57", pressed="#1e7e34")
 
 # ปุ่ม "ยกเลิก" — แบบเส้นขอบ (outline) ให้ดูเบากว่า ไม่แย่งความสนใจ
 BTN_OUTLINE = (
@@ -173,12 +178,11 @@ class TopologyCheckerDock(QgsDockWidget):
         self.iface = iface
         self.setObjectName("NodeTopologyCheckerDock")
 
-        self.result_manager = ResultLayerManager()
         self.task = None            # งานตรวจสอบที่กำลังรัน
         self.update_task = None     # งานตรวจสอบเวอร์ชัน
         self.install_task = None    # งานติดตั้งอัปเดต
         self._result_crs = None
-        self._last_transform_drops = 0
+        self.line_layer_id = None   # ชั้นเส้นที่วาด (บังคับมีได้ชั้นเดียว)
 
         self._build_ui()
 
@@ -212,6 +216,26 @@ class TopologyCheckerDock(QgsDockWidget):
         grid.addWidget(self.polygon_combo, 1, 1)
         root.addWidget(layer_group)
 
+        # ---- กลุ่ม: เครื่องมือวาดเส้น (Line) ----
+        # สร้างชั้นเส้น (สีเหลือง) ได้ชั้นเดียว แล้ววาด feature ลงในชั้นนั้น
+        line_group = QGroupBox("เครื่องมือวาดเส้น (Line)")
+        lg = QHBoxLayout(line_group)
+        lg.setSpacing(8)
+        self.btn_new_line = QPushButton("สร้าง Layer เส้น")
+        self.btn_new_line.setStyleSheet(BTN_GREEN)
+        self.btn_new_line.setCursor(Qt.PointingHandCursor)
+        self.btn_new_line.clicked.connect(self.on_new_line_layer)
+        self.btn_draw_line = QPushButton("✎ วาดเส้น")
+        self.btn_draw_line.setStyleSheet(BTN_BLUE)
+        self.btn_draw_line.setCursor(Qt.PointingHandCursor)
+        self.btn_draw_line.clicked.connect(self.on_draw_line)
+        self.btn_draw_line.setEnabled(False)
+        self.btn_draw_line.setToolTip(
+            "คลิกซ้ายเพื่อลงจุด, คลิกขวาเพื่อจบเส้น (วาดได้หลายเส้น)")
+        lg.addWidget(self.btn_new_line, 1)
+        lg.addWidget(self.btn_draw_line, 1)
+        root.addWidget(line_group)
+
         # ---- กลุ่ม: ตั้งค่าการตรวจสอบ ----
         # ค่า tolerance ใช้ค่า default ตายตัวในโค้ด (Overlap/Gap = Node = 0.001 ม.)
         # จึงไม่มีช่องกรอกบนหน้าต่าง เพื่อให้พื้นที่ตารางผลลัพธ์สูงขึ้น
@@ -234,6 +258,8 @@ class TopologyCheckerDock(QgsDockWidget):
         sv.addWidget(QLabel("รายการที่ต้องการตรวจ:"))
         self.chk_overlap = QCheckBox("ตรวจการทับซ้อน (Overlap)")
         self.chk_gap = QCheckBox("ตรวจช่องว่าง (Gap)")
+        self.chk_gap.setToolTip(
+            "Gap ตรวจทั้งชั้นเสมอเพื่อความถูกต้อง (ไม่จำกัดตามหน้าต่าง)")
         self.chk_node = QCheckBox("ตรวจ Node/Vertex กับ POINT")
         self.chk_overlap.setChecked(True)
         self.chk_gap.setChecked(True)
@@ -334,68 +360,49 @@ class TopologyCheckerDock(QgsDockWidget):
             self._warn("การตรวจ Node ต้องเลือกชั้นข้อมูล POINT ด้วย")
             return
 
-        tolerance = DEFAULT_TOLERANCE
-        node_tolerance = DEFAULT_NODE_TOLERANCE
+        window_scope = self.scope_window.isChecked()
 
-        # เตรียม request ตามขอบเขต
+        # เตรียม request ของ POLYGON (ตัด attribute ออก — ลดข้อมูลที่ดึงจากฐานข้อมูล)
         poly_request = QgsFeatureRequest()
-        try:
-            poly_request.setNoAttributes()
-        except Exception:  # noqa: BLE001
-            pass
+        poly_request.setNoAttributes()
+        # กรอบหน้าต่างใน CRS ของ POLYGON — ใช้กรอง Overlap/Node ตามหน้าต่าง
+        window_rect = None
+        if window_scope:
+            window_rect = self._canvas_rect_in_crs(poly_layer.crs())
+            # Gap ต้องเห็นแปลงที่ล้อมรอบช่องว่างครบ จึงตรวจทั้งชั้นเสมอ:
+            # ถ้าเลือก Gap → ไม่กรอง fetch (ดึงทั้งชั้น) แล้วไปกรอง Overlap/Node
+            # ในหน่วยความจำที่ฝั่ง task; ถ้าไม่ได้เลือก Gap → กรองที่ fetch เหมือนเดิม
+            if not do_gap and window_rect is not None:
+                poly_request.setFilterRect(window_rect)
 
-        if self.scope_window.isChecked():
-            rect = self._canvas_rect_in_crs(poly_layer.crs())
-            if rect is not None:
-                poly_request.setFilterRect(rect)
-
-        polygon_features = self._extract_features(poly_layer, poly_request)
-        if not polygon_features:
-            self._warn("ไม่พบข้อมูลโพลิกอนในขอบเขตที่เลือก")
-            return
-
-        point_features = []
+        # เตรียม request + transform ของ POINT (การดึงจริงทำใน background)
+        point_source = None
+        point_request = None
+        point_transform = None
+        rect_back_transform = None
         if do_node:
-            transform = None
+            point_source = QgsVectorLayerFeatureSource(point_layer)
+            point_request = QgsFeatureRequest()
+            point_request.setNoAttributes()
             if point_layer.crs() != poly_layer.crs():
-                transform = QgsCoordinateTransform(
+                point_transform = QgsCoordinateTransform(
                     point_layer.crs(), poly_layer.crs(), QgsProject.instance())
-            pt_request = QgsFeatureRequest()
-            try:
-                pt_request.setNoAttributes()
-            except Exception:  # noqa: BLE001
-                pass
-            if self.scope_window.isChecked():
-                # สำคัญ: กรองหมุดด้วย "ขอบเขตของแปลงที่ถูกดึงมาตรวจ" ไม่ใช่กรอบหน้าต่าง
-                # เพราะแปลงที่คาบเกี่ยวขอบหน้าต่างมี vertex อยู่นอกกรอบ — ถ้ากรองหมุด
-                # ด้วยกรอบหน้าต่าง หมุดของ vertex เหล่านั้นจะหายไปและถูกฟ้องผิด
-                rect = self._features_extent(
-                    polygon_features, margin=max(node_tolerance * 2.0, 1.0))
-                if rect is not None and point_layer.crs() != poly_layer.crs():
-                    try:
-                        back = QgsCoordinateTransform(
-                            poly_layer.crs(), point_layer.crs(), QgsProject.instance())
-                        rect = back.transformBoundingBox(rect)
-                    except Exception:  # noqa: BLE001
-                        rect = None  # แปลงกรอบไม่ได้ -> ไม่กรอง (ดึงหมุดทั้งหมด ปลอดภัยกว่า)
-                if rect is not None:
-                    pt_request.setFilterRect(rect)
-            point_features = self._extract_features(point_layer, pt_request, transform)
-
-            # แจ้งเตือนกรณีหมุดหายทั้งหมด (เช่น แปลง CRS ไม่สำเร็จ) เพื่อไม่ให้ผลตรวจหลอก
-            if self._last_transform_drops > 0:
-                self._warn("หมุด POINT จำนวน {} จุด แปลงพิกัด (CRS) ไม่สำเร็จ และถูกข้าม "
-                           "— ผลตรวจ Node อาจฟ้องเกินจริง".format(self._last_transform_drops))
-            if not point_features:
-                self._warn("ไม่พบหมุด POINT ในขอบเขตที่ตรวจ — ทุก Vertex จะถูกรายงานว่าไม่ตรง "
-                           "(ตรวจสอบชั้นข้อมูล POINT และ CRS)")
+                rect_back_transform = QgsCoordinateTransform(
+                    poly_layer.crs(), point_layer.crs(), QgsProject.instance())
 
         self._result_crs = poly_layer.crs()
 
-        # เริ่มงาน background
+        # เริ่มงาน background — การดึง feature (รวมชั้นจาก PostgreSQL/PostGIS)
+        # ทำในเธรดงานผ่าน QgsVectorLayerFeatureSource จึงไม่บล็อกหน้าจอ QGIS
         self.task = TopologyCheckTask(
-            polygon_features, point_features, tolerance, node_tolerance,
-            do_overlap, do_gap, do_node)
+            QgsVectorLayerFeatureSource(poly_layer), poly_request,
+            DEFAULT_TOLERANCE, DEFAULT_NODE_TOLERANCE,
+            do_overlap, do_gap, do_node,
+            point_source=point_source, point_request=point_request,
+            point_transform=point_transform, rect_back_transform=rect_back_transform,
+            window_scope=window_scope, window_rect=window_rect,
+            poly_count_hint=max(poly_layer.featureCount(), 0),
+            point_count_hint=max(point_layer.featureCount(), 0) if point_layer else 0)
         self.task.set_callback(self.on_check_finished)
         # ใช้ bound method เพื่อให้ Qt เลือก QueuedConnection อัตโนมัติ (progress มาจาก worker thread)
         self.task.progressChanged.connect(self._on_task_progress)
@@ -417,8 +424,21 @@ class TopologyCheckerDock(QgsDockWidget):
                 self.summary_label.setText("เกิดข้อผิดพลาด")
             return
 
+        if task.polygon_count == 0:
+            self._warn("ไม่พบข้อมูลโพลิกอนในขอบเขตที่เลือก")
+            self.summary_label.setText("ไม่พบข้อมูลโพลิกอนในขอบเขตที่เลือก")
+            return
+
+        # แจ้งเตือนปัญหาข้อมูลหมุดที่พบระหว่างดึงข้อมูลใน background
+        if task.do_node:
+            if task.transform_drops > 0:
+                self._warn("หมุด POINT จำนวน {} จุด แปลงพิกัด (CRS) ไม่สำเร็จ และถูกข้าม "
+                           "— ผลตรวจ Node อาจฟ้องเกินจริง".format(task.transform_drops))
+            if task.point_count == 0:
+                self._warn("ไม่พบหมุด POINT ในขอบเขตที่ตรวจ — ทุก Vertex จะถูกรายงานว่าไม่ตรง "
+                           "(ตรวจสอบชั้นข้อมูล POINT และ CRS)")
+
         results = task.results
-        self.result_manager.build(results, self._result_crs)
         self._populate_table(results)
 
         s = task.summary
@@ -443,9 +463,77 @@ class TopologyCheckerDock(QgsDockWidget):
             self.task.cancel()
 
     def on_clear(self):
-        self.result_manager.clear()
         self.table.setRowCount(0)
         self.summary_label.setText("ล้างผลลัพธ์แล้ว")
+
+    # ==================================================================
+    # เครื่องมือวาดเส้น (Line)
+    # ==================================================================
+    def _line_layer(self):
+        """คืนชั้นเส้นที่วาดไว้ (ถ้ายังอยู่ในโปรเจกต์) หรือ None"""
+        if self.line_layer_id is None:
+            return None
+        return QgsProject.instance().mapLayer(self.line_layer_id)
+
+    def on_new_line_layer(self):
+        """สร้างชั้นเส้น (memory) สีเหลือง — บังคับให้มีได้ชั้นเดียว"""
+        existing = self._line_layer()
+        if existing is not None:
+            self.iface.setActiveLayer(existing)
+            self._warn("มี Layer เส้นอยู่แล้ว — วาดเส้นลงในชั้นเดิมได้เลย")
+            self.btn_draw_line.setEnabled(True)
+            return
+
+        # ใช้ CRS ของโปรเจกต์ (ตรงกับพิกัดบนจอ) — fallback EPSG:4326
+        project_crs = QgsProject.instance().crs()
+        authid = project_crs.authid() if project_crs and project_crs.authid() else "EPSG:4326"
+        layer = QgsVectorLayer(
+            "LineString?crs={}".format(authid), "เส้นที่วาด (Line)", "memory")
+        if not layer.isValid():
+            self._warn("สร้างชั้นเส้นไม่สำเร็จ")
+            return
+        if project_crs and project_crs.isValid():
+            layer.setCrs(project_crs)
+
+        # สไตล์เส้นสีเหลือง หนา ~4
+        symbol = QgsLineSymbol.createSimple({
+            "line_color": "255,255,0,255",
+            "line_width": "4",
+            "capstyle": "round",
+            "joinstyle": "round",
+        })
+        renderer = layer.renderer()
+        if renderer is not None:
+            renderer.setSymbol(symbol)
+
+        # ปิดฟอร์ม attribute ตอนจบเส้น (ชั้นนี้ไม่มีฟิลด์ให้กรอกอยู่แล้ว)
+        cfg = layer.editFormConfig()
+        cfg.setSuppress(QgsEditFormConfig.SuppressOn)
+        layer.setEditFormConfig(cfg)
+
+        QgsProject.instance().addMapLayer(layer)
+        self.line_layer_id = layer.id()
+        self.btn_draw_line.setEnabled(True)
+        self.iface.setActiveLayer(layer)
+        self.iface.messageBar().pushMessage(
+            "สร้าง Layer เส้นแล้ว",
+            "กด '✎ วาดเส้น' เพื่อเริ่มวาด (คลิกขวาเพื่อจบเส้น)",
+            level=Qgis.Info, duration=5)
+
+    def on_draw_line(self):
+        """เริ่มวาดเส้นลงในชั้นเส้น: เปิด editing + เครื่องมือ Add Feature ของ QGIS"""
+        layer = self._line_layer()
+        if layer is None:
+            self.line_layer_id = None
+            self.btn_draw_line.setEnabled(False)
+            self._warn("กรุณาสร้าง Layer เส้นก่อน")
+            return
+
+        self.iface.setActiveLayer(layer)
+        if not layer.isEditable():
+            layer.startEditing()
+        # เครื่องมือ Add Feature มาตรฐาน: คลิกซ้ายลงจุด, คลิกขวาจบเส้น (ฟรี)
+        self.iface.actionAddFeature().trigger()
 
     # ==================================================================
     # ตาราง + ซูม
@@ -608,41 +696,6 @@ class TopologyCheckerDock(QgsDockWidget):
     # ==================================================================
     # ตัวช่วย
     # ==================================================================
-    def _extract_features(self, layer, request, transform=None):
-        """ดึง (fid, QgsGeometry) ออกจาก layer (คัดลอก geometry ออกมา แปลง CRS ถ้าจำเป็น)
-
-        นับจำนวน feature ที่แปลงพิกัดไม่สำเร็จไว้ใน self._last_transform_drops
-        เพื่อให้ผู้เรียกแจ้งเตือนได้ (การทิ้งเงียบ ๆ ทำให้ผลตรวจ Node หลอก)
-        """
-        out = []
-        self._last_transform_drops = 0
-        for feat in layer.getFeatures(request):
-            geom = feat.geometry()
-            if geom is None or geom.isEmpty():
-                continue
-            g = QgsGeometry(geom)
-            if transform is not None:
-                try:
-                    g.transform(transform)
-                except Exception:  # noqa: BLE001
-                    self._last_transform_drops += 1
-                    continue
-            out.append((feat.id(), g))
-        return out
-
-    def _features_extent(self, features, margin):
-        """คืนกรอบรวมของ features [(fid, geom)] ขยายขอบด้วย margin (หน่วยแผนที่)"""
-        rect = None
-        for _fid, geom in features:
-            bb = geom.boundingBox()
-            if rect is None:
-                rect = QgsRectangle(bb)
-            else:
-                rect.combineExtentWith(bb)
-        if rect is not None:
-            rect.grow(margin)
-        return rect
-
     def _canvas_rect_in_crs(self, dest_crs):
         """คืนกรอบมุมมองแผนที่ปัจจุบัน แปลงเข้าสู่ CRS ที่ต้องการ"""
         canvas = self.iface.mapCanvas()
