@@ -221,7 +221,9 @@ class TopologyCheckerDock(QgsDockWidget):
         # ---- กลุ่ม: เครื่องมือวาดเส้น (Line) ----
         # สร้างชั้นเส้น (สีเหลือง) ได้ชั้นเดียว แล้ววาด feature ลงในชั้นนั้น
         line_group = QGroupBox("เครื่องมือวาดเส้น (Line)")
-        lg = QHBoxLayout(line_group)
+        lv = QVBoxLayout(line_group)
+        lv.setSpacing(8)
+        lg = QHBoxLayout()
         lg.setSpacing(8)
         self.btn_new_line = QPushButton("สร้าง Layer เส้น")
         self.btn_new_line.setStyleSheet(BTN_GREEN)
@@ -237,6 +239,18 @@ class TopologyCheckerDock(QgsDockWidget):
             "เปิด snapping แบบ Vertex ให้อัตโนมัติ — เคอร์เซอร์จะดูดเข้าหามุม/หมุด")
         lg.addWidget(self.btn_new_line, 1)
         lg.addWidget(self.btn_draw_line, 1)
+        lv.addLayout(lg)
+
+        # เปิด/ปิดแถบ "ดิจิไทซ์ขั้นสูง" ของ QGIS — ใช้ล็อกมุม/ระยะขณะวาดเส้น
+        # (ไม่เด้งเอง ผู้ใช้กดเปิดเมื่อต้องการ แล้วพิมพ์องศาในแถบได้เอง)
+        self.chk_cad = QCheckBox("ล็อกมุม/ระยะ (แถบดิจิไทซ์ขั้นสูง)")
+        self.chk_cad.setToolTip(
+            "เปิดแถบ 'ดิจิไทซ์ขั้นสูง' ของ QGIS สำหรับล็อกแนวเส้น\n"
+            "• ช่อง a = มุม (พิมพ์เองได้ เช่น 30, 45, 90) แล้วกดแม่กุญแจเพื่อล็อก\n"
+            "• ช่อง d = ระยะ (พิมพ์ความยาวเป๊ะ ๆ ได้)\n"
+            "• หรือเลือกองศามาตรฐานจาก dropdown ในแถบ")
+        self.chk_cad.toggled.connect(self.on_toggle_cad)
+        lv.addWidget(self.chk_cad)
         root.addWidget(line_group)
 
         # ---- กลุ่ม: ตั้งค่าการตรวจสอบ ----
@@ -540,6 +554,31 @@ class TopologyCheckerDock(QgsDockWidget):
         config.setUnits(QgsTolerance.Pixels)
         project.setSnappingConfig(config)
 
+    def _apply_cad(self, enabled):
+        """เปิด/ปิดแถบดิจิไทซ์ขั้นสูงของ QGIS (ล็อกมุม/ระยะ)
+
+        ใช้ enableAction() ซึ่งเป็นปุ่มสลับ "เปิดเครื่องมือดิจิไทซ์ขั้นสูง" ของ QGIS เอง
+        จึงได้พฤติกรรมตรงกับที่ผู้ใช้กดเองในโปรแกรม
+        """
+        cad = self.iface.cadDockWidget()
+        if cad is None:
+            return False
+        action = cad.enableAction()
+        if action is not None and action.isEnabled() and action.isChecked() != enabled:
+            action.trigger()
+        cad.setVisible(enabled)
+        return True
+
+    def on_toggle_cad(self, checked):
+        """ผู้ใช้กดเปิด/ปิดช่อง 'ล็อกมุม/ระยะ'"""
+        try:
+            ok = self._apply_cad(checked)
+        except Exception:  # noqa: BLE001
+            ok = False
+        if not ok and checked:
+            self._warn("เปิดแถบดิจิไทซ์ขั้นสูงไม่สำเร็จ — เปิดเองได้ที่เมนู "
+                       "มุมมอง > แผงหน้าต่าง > ดิจิไทซ์ขั้นสูง")
+
     def on_draw_line(self):
         """เริ่มวาดเส้นลงในชั้นเส้น: เปิด snapping + editing + เครื่องมือ Add Feature"""
         layer = self._line_layer()
@@ -559,6 +598,13 @@ class TopologyCheckerDock(QgsDockWidget):
             layer.startEditing()
         # เครื่องมือ Add Feature มาตรฐาน: คลิกซ้ายลงจุด, คลิกขวาจบเส้น (ฟรี)
         self.iface.actionAddFeature().trigger()
+        # ถ้าผู้ใช้ติ๊ก "ล็อกมุม/ระยะ" ไว้ ให้แน่ใจว่าแถบยังเปิดอยู่หลังสลับเครื่องมือ
+        # (ต้องทำหลัง trigger เพราะ CAD ผูกกับ map tool ที่กำลังใช้งาน)
+        if self.chk_cad.isChecked():
+            try:
+                self._apply_cad(True)
+            except Exception:  # noqa: BLE001
+                pass
 
     # ==================================================================
     # ตาราง + ซูม
