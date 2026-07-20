@@ -11,11 +11,12 @@ topology_dock.py — หน้าต่าง (Dock) หลักของปล
 
 import os
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import QEvent, QObject, Qt
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QCheckBox,
+    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -48,7 +49,11 @@ from qgis.core import (
     QgsVectorLayer,
     QgsVectorLayerFeatureSource,
 )
-from qgis.gui import QgsDockWidget, QgsMapLayerComboBox
+from qgis.gui import (
+    QgsAdvancedDigitizingDockWidget,
+    QgsDockWidget,
+    QgsMapLayerComboBox,
+)
 
 from .check_task import TopologyCheckTask
 from . import update_checker
@@ -171,6 +176,39 @@ QFrame[frameShape="4"] { color: #e3e6ea; }
 """
 
 
+def _lock_mode(name):
+    """คืนค่า enum LockMode ตามชื่อ — รองรับตำแหน่ง enum ที่ต่างกันตามรุ่น QGIS
+
+    QGIS บางรุ่นวาง enum ไว้ที่ CadConstraint ตรง ๆ บางรุ่นซ้อนใน LockMode อีกชั้น
+    """
+    constraint_cls = QgsAdvancedDigitizingDockWidget.CadConstraint
+    holder = getattr(constraint_cls, "LockMode", constraint_cls)
+    return getattr(holder, name, None)
+
+
+class _ShiftAngleFilter(QObject):
+    """ดักปุ่ม Shift บนแผนที่ เพื่อเปิด/ปิดการล็อกมุมระหว่างวาดเส้น
+
+    ใช้ event filter แทนการเขียน map tool เอง — จึงยังได้พฤติกรรมมาตรฐานของ
+    เครื่องมือ Add Feature ครบ (คลิกขวาจบเส้น, undo, snapping)
+    """
+
+    def __init__(self, dock):
+        super().__init__(dock)
+        self._dock = dock
+
+    def eventFilter(self, obj, event):  # noqa: N802 (ชื่อกำหนดโดย Qt)
+        try:
+            etype = event.type()
+            if etype == QEvent.KeyPress and event.key() == Qt.Key_Shift:
+                self._dock.apply_angle_lock(True)
+            elif etype == QEvent.KeyRelease and event.key() == Qt.Key_Shift:
+                self._dock.apply_angle_lock(False)
+        except Exception:  # noqa: BLE001 - ห้ามให้ event filter พังจนคลิกแผนที่ไม่ได้
+            pass
+        return False  # ส่ง event ต่อเสมอ ไม่กลืน
+
+
 class TopologyCheckerDock(QgsDockWidget):
     """หน้าต่างหลักของปลั๊กอิน"""
 
@@ -251,7 +289,34 @@ class TopologyCheckerDock(QgsDockWidget):
             "• หรือเลือกองศามาตรฐานจาก dropdown ในแถบ")
         self.chk_cad.toggled.connect(self.on_toggle_cad)
         lv.addWidget(self.chk_cad)
+
+        # ---- ล็อกมุมด้วยปุ่ม Shift ----
+        angle_row = QHBoxLayout()
+        angle_row.setSpacing(8)
+        self.chk_shift_lock = QCheckBox("กด Shift ค้างเพื่อล็อกมุม")
+        self.chk_shift_lock.setChecked(True)
+        self.chk_shift_lock.setToolTip(
+            "ระหว่างวาดเส้น กดปุ่ม Shift ค้างไว้ = ล็อกมุมตามองศาที่ตั้ง\n"
+            "ปล่อย Shift = กลับมาลากอิสระเหมือนเดิม")
+        self.spin_angle = QDoubleSpinBox()
+        self.spin_angle.setRange(0.0, 360.0)
+        self.spin_angle.setDecimals(1)
+        self.spin_angle.setSingleStep(15.0)
+        self.spin_angle.setValue(90.0)   # ค่าเริ่มต้น: ตั้งฉากกับช่วงก่อนหน้า
+        self.spin_angle.setSuffix(" °")
+        self.spin_angle.setFixedWidth(90)
+        self.spin_angle.setToolTip("องศาที่จะล็อกเมื่อกด Shift (เทียบกับเส้นช่วงก่อนหน้า)")
+        angle_row.addWidget(self.chk_shift_lock, 1)
+        angle_row.addWidget(self.spin_angle)
+        lv.addLayout(angle_row)
         root.addWidget(line_group)
+
+        # ดักปุ่ม Shift บน canvas (ติดตั้งครั้งเดียว ถอดตอน unload)
+        self._shift_filter = _ShiftAngleFilter(self)
+        try:
+            self.iface.mapCanvas().installEventFilter(self._shift_filter)
+        except Exception:  # noqa: BLE001
+            self._shift_filter = None
 
         # ---- กลุ่ม: ตั้งค่าการตรวจสอบ ----
         # ค่า tolerance ใช้ค่า default ตายตัวในโค้ด (Overlap/Gap = Node = 0.001 ม.)
@@ -569,6 +634,41 @@ class TopologyCheckerDock(QgsDockWidget):
         cad.setVisible(enabled)
         return True
 
+    def apply_angle_lock(self, locked):
+        """ล็อก/ปลดล็อกมุมของการวาดเส้น (เรียกจากตัวดักปุ่ม Shift)
+
+        ใช้ระบบ constraint ของแถบดิจิไทซ์ขั้นสูง: ตั้งมุมแบบ "สัมพัทธ์กับช่วงก่อนหน้า"
+        แล้วสั่ง HardLock — QGIS จะบังคับแนวเส้นให้เอง พร้อมแสดงเส้นประบอกแนว
+        """
+        if not self.chk_shift_lock.isChecked():
+            return
+        # ล็อกมุมต้องมีชั้นเส้นที่กำลังแก้ไขอยู่ ไม่งั้นไปกวนการวาดชั้นอื่นของผู้ใช้
+        layer = self._line_layer()
+        if layer is None or not layer.isEditable():
+            return
+
+        cad = self.iface.cadDockWidget()
+        if cad is None:
+            return
+        constraint = cad.constraintAngle()
+        if constraint is None:
+            return
+
+        if locked:
+            # CAD ต้องเปิดก่อน constraint ถึงจะมีผล
+            if not cad.cadEnabled():
+                self._apply_cad(True)
+                self.chk_cad.blockSignals(True)
+                self.chk_cad.setChecked(True)
+                self.chk_cad.blockSignals(False)
+            constraint.setRelative(True)
+            constraint.setValue(float(self.spin_angle.value()), True)
+            mode = _lock_mode("HardLock")
+        else:
+            mode = _lock_mode("NoLock")
+        if mode is not None:
+            constraint.setLockMode(mode)
+
     def on_toggle_cad(self, checked):
         """ผู้ใช้กดเปิด/ปิดช่อง 'ล็อกมุม/ระยะ'"""
         try:
@@ -823,6 +923,13 @@ class TopologyCheckerDock(QgsDockWidget):
     # cleanup (เรียกตอน unload ปลั๊กอิน)
     # ==================================================================
     def cleanup(self):
+        # ถอดตัวดักปุ่ม Shift ออกจาก canvas ไม่งั้นค้างหลัง unload ปลั๊กอิน
+        if getattr(self, "_shift_filter", None) is not None:
+            try:
+                self.iface.mapCanvas().removeEventFilter(self._shift_filter)
+            except Exception:  # noqa: BLE001
+                pass
+            self._shift_filter = None
         if self.task is not None:
             try:
                 self.task.cancel()
