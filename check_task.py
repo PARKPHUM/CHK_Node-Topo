@@ -67,9 +67,14 @@ class TopologyCheckTask(QgsTask):
                                     ใช้แปลงกรอบกรองหมุดในโหมด "เฉพาะหน้าต่าง"
         :param window_scope: True เมื่อผู้ใช้เลือกตรวจเฉพาะหน้าต่างปัจจุบัน
         :param window_rect: QgsRectangle กรอบหน้าต่าง (CRS ของ POLYGON) — ใช้กรอง
-                            Overlap/Node ในหน่วยความจำเมื่อ Gap บังคับดึงแปลงทั้งชั้น
-                            (Gap ต้องเห็นวงล้อมรอบครบ จึงตรวจทั้งชั้นเสมอ)
+                            ผลลัพธ์ Overlap/Gap ให้เหลือเฉพาะที่แตะกรอบหน้าต่างจริง
+                            (แปลงคาบขอบถูกดึงมาทั้งตัว จึงอาจพบพื้นที่ผิดนอกกรอบ)
         :param poly_count_hint: จำนวน feature โดยประมาณ (ใช้คำนวณ progress เท่านั้น)
+
+        หมายเหตุโหมดหน้าต่าง: Gap ตรวจจากแปลงที่แตะกรอบหน้าต่างเท่านั้น —
+        การตัดขอบ fetch ไม่สร้าง Gap ปลอม (วงล้อมที่ไม่ครบจะรวมกับภายนอก
+        ไม่เกิด interior ring) มีแต่พลาดช่องว่างที่วงล้อมใหญ่เกินหน้าต่าง
+        ซึ่งตรงตามความหมาย "ตรวจเฉพาะหน้าต่างปัจจุบัน"
         """
         super().__init__("ตรวจสอบ Topology / Node", QgsTask.CanCancel)
         self.poly_source = poly_source
@@ -118,18 +123,6 @@ class TopologyCheckTask(QgsTask):
             if not polygon_features:
                 return True  # ไม่มีข้อมูล — ให้ฝั่ง UI แจ้งเตือนเอง
 
-            # แยกชุดข้อมูล: Gap ต้องเห็นวงล้อมรอบครบ จึงตรวจ "ทั้งชั้น" เสมอ
-            # ส่วน Overlap/Node จำกัดตามหน้าต่าง (กรองในหน่วยความจำ) เมื่อผู้ใช้เลือก
-            # โหมด "เฉพาะหน้าต่าง" และ Gap เป็นตัวบังคับให้ดึงแปลงมาทั้งชั้น
-            gap_features = polygon_features
-            if (self.window_scope and self.do_gap
-                    and self.window_rect is not None):
-                local_features = [
-                    (fid, g) for (fid, g) in polygon_features
-                    if g.boundingBox().intersects(self.window_rect)]
-            else:
-                local_features = polygon_features
-
             # ---- ขั้นที่ 2: ดึงข้อมูล POINT (10-20%) ----
             point_features = []
             if self.do_node and self.point_source is not None:
@@ -137,9 +130,8 @@ class TopologyCheckTask(QgsTask):
                     # สำคัญ: กรองหมุดด้วย "ขอบเขตของแปลงที่ถูกดึงมาตรวจ" ไม่ใช่กรอบหน้าต่าง
                     # เพราะแปลงที่คาบเกี่ยวขอบหน้าต่างมี vertex อยู่นอกกรอบ — ถ้ากรองหมุด
                     # ด้วยกรอบหน้าต่าง หมุดของ vertex เหล่านั้นจะหายไปและถูกฟ้องผิด
-                    # ใช้ local_features (ชุดที่ Node จะตรวจจริง) ไม่ใช่ทั้งชั้น
                     rect = _features_extent(
-                        local_features,
+                        polygon_features,
                         margin=max(self.node_tolerance * 2.0, 1.0))
                     if rect is not None and self.rect_back_transform is not None:
                         try:
@@ -159,13 +151,13 @@ class TopologyCheckTask(QgsTask):
             stages = []
             if self.do_overlap:
                 stages.append(("overlap", find_overlaps,
-                               (local_features, self.tolerance)))
+                               (polygon_features, self.tolerance)))
             if self.do_gap:
                 stages.append(("gap", find_gaps,
-                               (gap_features, self.tolerance)))
+                               (polygon_features, self.tolerance)))
             if self.do_node:
                 stages.append(("node", find_unmatched_vertices,
-                               (local_features, point_features, self.node_tolerance)))
+                               (polygon_features, point_features, self.node_tolerance)))
 
             results = []
             span = 80.0 / max(len(stages), 1)
@@ -176,6 +168,11 @@ class TopologyCheckTask(QgsTask):
                 results.extend(func(*args, feedback=progress))
             if self.isCanceled():
                 return False
+
+            # โหมดหน้าต่าง: ตัดผล Overlap/Gap ที่อยู่นอกกรอบหน้าต่างออก
+            # (แปลงคาบขอบถูกดึงมาทั้งตัว พื้นที่ผิดจึงโผล่นอกกรอบได้)
+            if self.window_scope and self.window_rect is not None:
+                results = _filter_to_window(results, self.window_rect)
 
             self.results = results
             for item in results:
@@ -227,6 +224,27 @@ class TopologyCheckTask(QgsTask):
         """เรียกโดย task manager บน main thread"""
         if self._on_done is not None:
             self._on_done(result, self)
+
+
+def _filter_to_window(results, window_rect):
+    """คงเฉพาะผล Overlap/Gap ที่ geometry แตะกรอบหน้าต่าง (Node คงพฤติกรรมเดิม)
+
+    เช็ก bbox ก่อน (ถูก) แล้วค่อย intersects จริง (แพง) เฉพาะตัวที่ bbox ชนกรอบ
+    """
+    window_geom = QgsGeometry.fromRect(window_rect)
+    out = []
+    for item in results:
+        if item.get("type") not in ("overlap", "gap"):
+            out.append(item)
+            continue
+        geom = item.get("geometry")
+        if geom is None or geom.isEmpty():
+            continue
+        if not geom.boundingBox().intersects(window_rect):
+            continue
+        if geom.intersects(window_geom):
+            out.append(item)
+    return out
 
 
 def _features_extent(features, margin):

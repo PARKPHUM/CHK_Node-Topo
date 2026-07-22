@@ -56,6 +56,7 @@ from qgis.gui import (
 )
 
 from .check_task import TopologyCheckTask
+from .result_layers import ResultLayerManager
 from . import update_checker
 
 PLUGIN_DIR = os.path.dirname(__file__)
@@ -218,6 +219,7 @@ class TopologyCheckerDock(QgsDockWidget):
         self.iface = iface
         self.setObjectName("NodeTopologyCheckerDock")
 
+        self.result_manager = ResultLayerManager()
         self.task = None            # งานตรวจสอบที่กำลังรัน
         self.update_task = None     # งานตรวจสอบเวอร์ชัน
         self.install_task = None    # งานติดตั้งอัปเดต
@@ -340,8 +342,6 @@ class TopologyCheckerDock(QgsDockWidget):
         sv.addWidget(QLabel("รายการที่ต้องการตรวจ:"))
         self.chk_overlap = QCheckBox("ตรวจการทับซ้อน (Overlap)")
         self.chk_gap = QCheckBox("ตรวจช่องว่าง (Gap)")
-        self.chk_gap.setToolTip(
-            "Gap ตรวจทั้งชั้นเสมอเพื่อความถูกต้อง (ไม่จำกัดตามหน้าต่าง)")
         self.chk_node = QCheckBox("ตรวจ Node/Vertex กับ POINT")
         self.chk_overlap.setChecked(True)
         self.chk_gap.setChecked(True)
@@ -447,14 +447,12 @@ class TopologyCheckerDock(QgsDockWidget):
         # เตรียม request ของ POLYGON (ตัด attribute ออก — ลดข้อมูลที่ดึงจากฐานข้อมูล)
         poly_request = QgsFeatureRequest()
         poly_request.setNoAttributes()
-        # กรอบหน้าต่างใน CRS ของ POLYGON — ใช้กรอง Overlap/Node ตามหน้าต่าง
+        # กรอบหน้าต่างใน CRS ของ POLYGON — กรองที่ fetch เสมอ (ดันลง GiST index
+        # ฝั่งฐานข้อมูล) และส่งเข้า task ไว้ตัดผล Overlap/Gap นอกกรอบทิ้ง
         window_rect = None
         if window_scope:
             window_rect = self._canvas_rect_in_crs(poly_layer.crs())
-            # Gap ต้องเห็นแปลงที่ล้อมรอบช่องว่างครบ จึงตรวจทั้งชั้นเสมอ:
-            # ถ้าเลือก Gap → ไม่กรอง fetch (ดึงทั้งชั้น) แล้วไปกรอง Overlap/Node
-            # ในหน่วยความจำที่ฝั่ง task; ถ้าไม่ได้เลือก Gap → กรองที่ fetch เหมือนเดิม
-            if not do_gap and window_rect is not None:
+            if window_rect is not None:
                 poly_request.setFilterRect(window_rect)
 
         # เตรียม request + transform ของ POINT (การดึงจริงทำใน background)
@@ -521,6 +519,7 @@ class TopologyCheckerDock(QgsDockWidget):
                            "(ตรวจสอบชั้นข้อมูล POINT และ CRS)")
 
         results = task.results
+        self.result_manager.build(results, self._result_crs)
         self._populate_table(results)
 
         s = task.summary
@@ -545,6 +544,7 @@ class TopologyCheckerDock(QgsDockWidget):
             self.task.cancel()
 
     def on_clear(self):
+        self.result_manager.clear()
         self.table.setRowCount(0)
         self.summary_label.setText("ล้างผลลัพธ์แล้ว")
 
