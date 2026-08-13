@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Node & Topology Checker - QGIS Plugin
-=====================================
-ตรวจสอบ Topology (Gap/Overlap) แบบมีค่า Tolerance และตรวจสอบ Node/Vertex
-ของ POLYGON ที่ไม่ตรงกับ POINT
+Line Draw & Measure - QGIS Plugin
+=================================
+เครื่องมือวาดเส้นพร้อมแสดงระยะแต่ละช่วงเป็นเมตร ล็อกมุม/ล็อกระยะระหว่างวาด
+และแสดง Node ที่จุดหักของเส้น
 
 ผู้พัฒนา : นายภาคภูมิ สูบกำปัง
 ตำแหน่ง  : วิศวกรรังวัดปฏิบัติการ
@@ -18,5 +18,5 @@ def classFactory(iface):  # pylint: disable=invalid-name
     :param iface: อินเทอร์เฟซของ QGIS ที่ส่งเข้ามาตอนโหลดปลั๊กอิน
     :type iface: QgsInterface
     """
-    from .plugin import NodeTopologyCheckerPlugin
-    return NodeTopologyCheckerPlugin(iface)
+    from .plugin import LineDrawMeasurePlugin
+    return LineDrawMeasurePlugin(iface)

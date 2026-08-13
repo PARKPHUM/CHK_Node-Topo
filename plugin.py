@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-คลาสหลักของปลั๊กอิน: สร้างเมนู/ทูลบาร์ และเปิดหน้าต่าง (dock) ตรวจสอบ
+คลาสหลักของปลั๊กอิน: สร้างเมนู/ทูลบาร์ และเปิดหน้าต่าง (dock) เครื่องมือวาดเส้น
 
 ผู้พัฒนา : นายภาคภูมิ สูบกำปัง
 ตำแหน่ง  : วิศวกรรังวัดปฏิบัติการ
@@ -13,11 +13,11 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
-from .topology_dock import TopologyCheckerDock
+from .line_dock import LineToolDock
 
 PLUGIN_DIR = os.path.dirname(__file__)
-PLUGIN_NAME = "Node & Topology Checker"
-MENU_TITLE = "&Node && Topology Checker"
+PLUGIN_NAME = "Line Draw & Measure"
+MENU_TITLE = "&วาดเส้น && วัดระยะ"
 
 
 def find_plugin_icon():
@@ -46,7 +46,7 @@ def find_plugin_icon():
     return QIcon()
 
 
-class NodeTopologyCheckerPlugin:
+class LineDrawMeasurePlugin:
     """จุดเชื่อมต่อของปลั๊กอินกับ QGIS"""
 
     def __init__(self, iface):
@@ -59,10 +59,10 @@ class NodeTopologyCheckerPlugin:
     # วงจรชีวิตของปลั๊กอิน
     # ------------------------------------------------------------------
     def initGui(self):  # noqa: N802 (ชื่อกำหนดโดย QGIS)
-        """สร้าง action สำหรับเปิดหน้าต่างตรวจสอบ"""
+        """สร้าง action สำหรับเปิดหน้าต่างเครื่องมือวาดเส้น"""
         icon = find_plugin_icon()
 
-        action = QAction(icon, "เปิดตัวตรวจสอบ Topology / Node", self.iface.mainWindow())
+        action = QAction(icon, "เปิดเครื่องมือวาดเส้น & วัดระยะ", self.iface.mainWindow())
         action.triggered.connect(self.run)
         action.setCheckable(False)
 
@@ -91,9 +91,9 @@ class NodeTopologyCheckerPlugin:
     # การทำงาน
     # ------------------------------------------------------------------
     def run(self):
-        """เปิด/แสดงหน้าต่างตรวจสอบ"""
+        """เปิด/แสดงหน้าต่างเครื่องมือวาดเส้น"""
         if self.dock is None:
-            self.dock = TopologyCheckerDock(self.iface)
+            self.dock = LineToolDock(self.iface)
             self.dock.destroyed.connect(self._on_dock_destroyed)
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
 

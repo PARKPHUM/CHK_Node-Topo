@@ -240,7 +240,7 @@ class UpdateInstallTask(QgsTask):
             self.error_message = str(exc)
             QgsMessageLog.logMessage(
                 "UpdateInstallTask error: {}".format(exc),
-                "Node & Topology Checker", Qgis.Critical)
+                "Line Draw & Measure", Qgis.Critical)
             return False
         finally:
             if tmp_dir and os.path.isdir(tmp_dir):
