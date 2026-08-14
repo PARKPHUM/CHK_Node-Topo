@@ -20,6 +20,7 @@ import os
 from qgis.PyQt.QtCore import QEvent, QObject, QSettings, Qt
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFrame,
@@ -52,6 +53,11 @@ PLUGIN_DIR = os.path.dirname(__file__)
 
 #: คีย์เก็บตำแหน่ง/ขนาดหน้าต่าง เพื่อเปิดมาที่เดิมทุกครั้ง
 SETTINGS_GEOMETRY = "LineDrawMeasure/windowGeometry"
+
+# ฐานที่ใช้นับองศาของการล็อกมุม
+BASIS_NORTH = "north"   # 0° = ทิศเหนือกริด (มุมสัมบูรณ์ ล็อกตามที่กรอกเป๊ะ ๆ)
+BASIS_REF = "ref"       # 0° = ขนานกับแนวอ้างอิงที่ Ctrl+คลิกไว้
+BASIS_PREV = "prev"     # 0° = ตรงต่อจากเส้นช่วงก่อนหน้า (พฤติกรรมเดิม)
 
 # ==================================================================
 # ชุดสี/สไตล์ — โทน Bootstrap ให้เข้าชุดกับปลั๊กอิน Filter_PATH
@@ -184,6 +190,10 @@ class _CanvasFilter(QObject):
                     self._swallow_release = False
                 return True
 
+            elif etype == QEvent.MouseMove:
+                # แค่ตามเมาส์ไปวาดเส้นนำสายตา — ห้ามกลืน ไม่งั้นวาดเส้นไม่ได้
+                self._dock.handle_mouse_move(event.pos())
+
         except Exception:  # noqa: BLE001 - ห้ามให้ event filter พังจนคลิกแผนที่ไม่ได้
             pass
         return False  # ส่ง event ต่อเสมอ ไม่กลืน
@@ -207,6 +217,7 @@ class LineToolWindow(QDialog):
         self.install_task = None    # งานติดตั้งอัปเดต
         self._warned_units = False  # เตือนเรื่องหน่วยของช่องล็อกระยะแค่ครั้งเดียว
         self._cad_visible_before = None  # สถานะแถบ CAD ก่อนที่ปลั๊กอินจะไปซ่อน
+        self._last_cursor_pos = None     # ตำแหน่งเมาส์ล่าสุดบนแผนที่ (ไว้วาดเส้นนำสายตา)
 
         self.layers = LineToolLayers(iface, self)
         self.layers.layersChanged.connect(self._sync_layer_state)
@@ -303,6 +314,7 @@ class LineToolWindow(QDialog):
         self.chk_shift_lock.setToolTip(
             "ระหว่างวาดเส้น กดปุ่ม Shift ค้างไว้ = ล็อกมุมตามองศาที่ตั้ง\n"
             "ปล่อย Shift = กลับมาลากอิสระเหมือนเดิม")
+        self.chk_shift_lock.toggled.connect(lambda _c: self._sync_angle_ref())
         self.spin_angle = QDoubleSpinBox()
         self.spin_angle.setRange(0.0, 360.0)
         self.spin_angle.setDecimals(1)
@@ -310,15 +322,30 @@ class LineToolWindow(QDialog):
         self.spin_angle.setValue(90.0)   # ค่าเริ่มต้น: ตั้งฉาก
         self.spin_angle.setSuffix(" °")
         self.spin_angle.setFixedWidth(120)
-        self.spin_angle.setToolTip(
-            "องศาที่จะล็อกเมื่อกด Shift\n"
-            "• ไม่มีแนวอ้างอิง = เทียบกับเส้นช่วงก่อนหน้า\n"
-            "• มีแนวอ้างอิง = เทียบกับแนวที่ Ctrl+คลิกไว้ (90° = ตั้งฉากกับแนวนั้น)")
+        self.spin_angle.setToolTip("องศาที่จะล็อกเมื่อกด Shift — นับจากฐานที่เลือกด้านล่าง")
         # เปลี่ยนองศาแล้วข้อความ "จะล็อกที่อาซิมุทเท่าไหร่" ต้องอัปเดตตาม
         self.spin_angle.valueChanged.connect(lambda _v: self._sync_angle_ref())
         angle_row.addWidget(self.chk_shift_lock, 1)
         angle_row.addWidget(self.spin_angle)
         kv.addLayout(angle_row)
+
+        # ฐานที่ใช้นับองศา — จุดนี้สำคัญ ถ้าเลือกผิดจะรู้สึกว่า "ล็อกแล้วยังเอียง"
+        basis_row = QHBoxLayout()
+        basis_row.setSpacing(8)
+        basis_row.addWidget(QLabel("นับมุมจาก:"))
+        self.combo_basis = QComboBox()
+        self.combo_basis.addItem("ทิศเหนือ (สัมบูรณ์)", BASIS_NORTH)
+        self.combo_basis.addItem("แนวอ้างอิง (Ctrl+คลิก)", BASIS_REF)
+        self.combo_basis.addItem("เส้นช่วงก่อนหน้า (สัมพัทธ์)", BASIS_PREV)
+        self.combo_basis.setCurrentIndex(2)   # ค่าเดิมของปลั๊กอิน: สัมพัทธ์
+        self.combo_basis.setToolTip(
+            "ฐานที่ใช้นับองศาในช่องด้านบน:\n"
+            "• ทิศเหนือ = 0° คือเหนือกริดเป๊ะ ๆ (ล็อกตามมุมที่กรอกตรง ๆ)\n"
+            "• แนวอ้างอิง = 0° คือขนานกับแนวที่ Ctrl+คลิกไว้, 90° คือตั้งฉากกับแนวนั้น\n"
+            "• เส้นช่วงก่อนหน้า = 0° คือตรงต่อจากช่วงที่เพิ่งลาก, 90° คือหักฉาก")
+        self.combo_basis.currentIndexChanged.connect(lambda _i: self._sync_angle_ref())
+        basis_row.addWidget(self.combo_basis, 1)
+        kv.addLayout(basis_row)
         root.addWidget(lock_group)
 
         # ---- กลุ่ม: แนวอ้างอิงมุม ----
@@ -528,7 +555,14 @@ class LineToolWindow(QDialog):
             return False
         if not isinstance(tool, QgsMapToolCapture):
             return False
-        return self.angle_ref.handle_click(screen_pos)
+        taken = self.angle_ref.handle_click(screen_pos)
+        # จับแนวครบ 2 จุดแล้ว = ผู้ใช้ตั้งใจจะอ้างอิงแนวนั้น สลับฐานให้เลย
+        # (ถ้าไม่สลับ ค่าที่เพิ่งจับมาจะไม่ถูกใช้ ผู้ใช้จะงงว่าจับไปทำไม)
+        if taken and self.angle_ref.has_reference() and self._basis() != BASIS_REF:
+            index = self.combo_basis.findData(BASIS_REF)
+            if index >= 0:
+                self.combo_basis.setCurrentIndex(index)
+        return taken
 
     def on_toggle_angle_ref(self, checked):
         if not checked:
@@ -538,26 +572,89 @@ class LineToolWindow(QDialog):
     def on_clear_angle_ref(self):
         self.angle_ref.clear()
 
+    def _basis(self):
+        """ฐานที่ใช้นับองศาตามที่ผู้ใช้เลือก"""
+        return self.combo_basis.currentData()
+
+    def target_azimuth(self):
+        """อาซิมุทที่จะถูกล็อกจริง — None แปลว่าใช้โหมดสัมพัทธ์กับช่วงก่อนหน้า
+
+        นี่คือจุดเดียวที่ตัดสินว่า "องศาในช่อง" หมายถึงมุมจากอะไร
+        """
+        angle = float(self.spin_angle.value())
+        basis = self._basis()
+        if basis == BASIS_NORTH:
+            return angle % 360.0
+        if basis == BASIS_REF:
+            azimuth = self.angle_ref.azimuth()
+            if azimuth is None:
+                return None   # ยังไม่มีแนวอ้างอิง — ตกไปใช้โหมดสัมพัทธ์
+            return (azimuth + angle) % 360.0
+        return None
+
     def _sync_angle_ref(self):
-        """อัปเดตช่องอาซิมุท + คำอธิบายว่าการล็อกมุมจะอิงอะไร"""
+        """อัปเดตช่องอาซิมุท + คำอธิบายว่าการล็อกมุมจะอิงอะไร + เส้นนำสายตา"""
         azimuth = self.angle_ref.azimuth()
         count = self.angle_ref.point_count()
 
         if azimuth is not None:
             self.edit_ref_azimuth.setText("{:.3f} °".format(azimuth))
-            target = (azimuth + float(self.spin_angle.value())) % 360.0
-            self.lbl_lock_target.setText(
-                "กด Shift → ล็อกแนวที่อาซิมุท {:.3f}° "
-                "(แนวอ้างอิง {:.3f}° + {:.1f}°)".format(
-                    target, azimuth, self.spin_angle.value()))
         elif count == 1:
             self.edit_ref_azimuth.setText("รออีก 1 จุด")
-            self.lbl_lock_target.setText(
-                "Ctrl + คลิกซ้ายอีกครั้งเพื่อกำหนดจุดที่ 2 ของแนว")
         else:
             self.edit_ref_azimuth.setText("—")
+
+        basis = self._basis()
+        target = self.target_azimuth()
+        angle = float(self.spin_angle.value())
+
+        if basis == BASIS_NORTH:
             self.lbl_lock_target.setText(
-                "ยังไม่มีแนวอ้างอิง — กด Shift จะล็อกมุมเทียบกับเส้นช่วงก่อนหน้าแทน")
+                "กด Shift → ล็อกแนวที่อาซิมุท {:.3f}° (นับจากทิศเหนือกริดตรง ๆ)".format(target))
+        elif basis == BASIS_REF and target is not None:
+            self.lbl_lock_target.setText(
+                "กด Shift → ล็อกแนวที่อาซิมุท {:.3f}° "
+                "(แนวอ้างอิง {:.3f}° + {:.1f}°)".format(target, azimuth, angle))
+        elif basis == BASIS_REF:
+            self.lbl_lock_target.setText(
+                "เลือก 'แนวอ้างอิง' ไว้แต่ยังไม่ได้ Ctrl+คลิก 2 จุด "
+                "— ตอนนี้กด Shift จะล็อกเทียบเส้นช่วงก่อนหน้าไปก่อน")
+        else:
+            self.lbl_lock_target.setText(
+                "กด Shift → ล็อกที่ {:.1f}° เทียบกับเส้นช่วงก่อนหน้า "
+                "(0° = ตรงต่อไป, 90° = หักฉาก)".format(angle))
+
+        self._refresh_cursor_guide()
+
+    # ------------------------------------------------------------------
+    # เส้นนำสายตาที่เคอร์เซอร์
+    # ------------------------------------------------------------------
+    def handle_mouse_move(self, screen_pos):
+        """เมาส์ขยับบนแผนที่ — ขยับเส้นนำสายตาตาม (ไม่กลืน event)"""
+        self._last_cursor_pos = screen_pos
+        self._refresh_cursor_guide()
+
+    def _refresh_cursor_guide(self):
+        """วาด/ลบเส้นนำสายตา ตามสถานะปัจจุบัน
+
+        แสดงเฉพาะตอนที่มีมุมเป้าหมายชัดเจน และกำลังใช้เครื่องมือวาดอยู่จริง
+        (โหมดสัมพัทธ์ไม่มีแนวตายตัวให้เล็ง จึงไม่วาด)
+        """
+        guide = getattr(self, "angle_ref", None)
+        if guide is None:
+            return
+        target = self.target_azimuth() if self.chk_shift_lock.isChecked() else None
+        if target is None or self._last_cursor_pos is None or not self._is_capture_tool():
+            guide.clear_cursor_guide()
+            return
+        guide.show_cursor_guide(self._last_cursor_pos, target)
+
+    def _is_capture_tool(self):
+        """กำลังใช้เครื่องมือ 'วาด' ของ QGIS อยู่หรือไม่"""
+        try:
+            return isinstance(self.iface.mapCanvas().mapTool(), QgsMapToolCapture)
+        except Exception:  # noqa: BLE001
+            return False
 
     # ==================================================================
     # ล็อกระยะ / ล็อกมุม (ระบบดิจิไทซ์ขั้นสูงของ QGIS)
@@ -699,14 +796,14 @@ class LineToolWindow(QDialog):
 
         if locked:
             self._ensure_cad_enabled()
-            azimuth = self.angle_ref.azimuth() if self.chk_angle_ref.isChecked() else None
-            if azimuth is None:
+            target = self.target_azimuth()
+            if target is None:
+                # โหมดสัมพัทธ์: 0° = ตรงต่อจากช่วงก่อนหน้า
                 constraint.setRelative(True)
                 constraint.setValue(float(self.spin_angle.value()), True)
             else:
                 # แปลงอาซิมุท (ตามเข็ม จากทิศเหนือ) → มุมของ CAD ที่ QGIS ใช้
-                # ซึ่งวัดทวนเข็มจากแกน +X (ทิศตะวันออก)
-                target = (azimuth + float(self.spin_angle.value())) % 360.0
+                # ซึ่งวัดทวนเข็มจากแกน +X (ทิศตะวันออก): cad = 90 - azimuth
                 constraint.setRelative(False)
                 constraint.setValue((90.0 - target) % 360.0, True)
             mode = _lock_mode("HardLock")

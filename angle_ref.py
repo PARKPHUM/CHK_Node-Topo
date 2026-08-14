@@ -26,6 +26,8 @@ from qgis.gui import QgsRubberBand, QgsVertexMarker
 
 #: สีของแนวอ้างอิง — ม่วง ให้ต่างจากเส้นเหลืองที่วาดและจุด Node สีแดง
 REF_COLOR = QColor("#8e44ad")
+#: สีเส้นนำสายตาที่ลากผ่านเคอร์เซอร์ — ม่วงอมชมพู อ่อนกว่า ไม่แย่งสายตาแนวอ้างอิง
+GUIDE_COLOR = QColor("#e050c8")
 
 
 def _line_geometry_type():
@@ -49,6 +51,7 @@ class AngleReference(QObject):
         self._p2 = None
         self._band = None
         self._markers = []
+        self._guide_band = None   # เส้นนำสายตาที่ลากผ่านเคอร์เซอร์
 
     # ==================================================================
     # สถานะ
@@ -153,6 +156,51 @@ class AngleReference(QObject):
         self._markers = []
 
     # ==================================================================
+    # เส้นนำสายตาที่เคอร์เซอร์
+    # ==================================================================
+    def show_cursor_guide(self, screen_pos, azimuth):
+        """ลากเส้นนำสายตาผ่านตำแหน่งเคอร์เซอร์ ตามแนวที่กด Shift แล้วจะล็อกได้
+
+        ช่วยให้เห็นล่วงหน้าว่าแนวที่จะล็อกพาดไปทางไหน ก่อนจะคลิกลงจุดจริง
+        (เส้นพาดยาวข้ามจอ เพราะประโยชน์คือใช้เล็งเทียบกับของอื่นบนแผนที่)
+        """
+        if azimuth is None or screen_pos is None:
+            self.clear_cursor_guide()
+            return
+
+        canvas = self.iface.mapCanvas()
+        try:
+            centre = QgsPointXY(canvas.getCoordinateTransform().toMapCoordinates(screen_pos))
+            extent = canvas.extent()
+            reach = math.hypot(extent.width(), extent.height())
+        except Exception:  # noqa: BLE001
+            self.clear_cursor_guide()
+            return
+
+        # อาซิมุท (ตามเข็ม จากทิศเหนือ) → เวกเตอร์ทิศทางบนระนาบแผนที่
+        rad = math.radians(azimuth)
+        ux, uy = math.sin(rad), math.cos(rad)
+
+        if self._guide_band is None:
+            self._guide_band = QgsRubberBand(canvas, _line_geometry_type())
+            self._guide_band.setColor(GUIDE_COLOR)
+            self._guide_band.setWidth(1)
+            try:
+                self._guide_band.setLineStyle(Qt.DashLine)
+            except (AttributeError, TypeError):
+                pass
+
+        self._guide_band.reset(_line_geometry_type())
+        self._guide_band.addPoint(
+            QgsPointXY(centre.x() - ux * reach, centre.y() - uy * reach), False)
+        self._guide_band.addPoint(
+            QgsPointXY(centre.x() + ux * reach, centre.y() + uy * reach), True)
+
+    def clear_cursor_guide(self):
+        if self._guide_band is not None:
+            self._guide_band.reset(_line_geometry_type())
+
+    # ==================================================================
     # ล้าง / เก็บกวาด
     # ==================================================================
     def clear(self, silent=False):
@@ -161,14 +209,22 @@ class AngleReference(QObject):
         self._clear_markers()
         if self._band is not None:
             self._band.reset(_line_geometry_type())
+        self.clear_cursor_guide()
         if not silent:
             self.referenceChanged.emit()
 
     def cleanup(self):
         self._clear_markers()
-        if self._band is not None:
-            try:
-                self.iface.mapCanvas().scene().removeItem(self._band)
-            except Exception:  # noqa: BLE001
-                pass
-            self._band = None
+        scene = None
+        try:
+            scene = self.iface.mapCanvas().scene()
+        except Exception:  # noqa: BLE001
+            pass
+        for band in (self._band, self._guide_band):
+            if band is not None and scene is not None:
+                try:
+                    scene.removeItem(band)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._band = None
+        self._guide_band = None
