@@ -145,6 +145,7 @@ class LineToolDock(QgsDockWidget):
         self.update_task = None     # งานตรวจสอบเวอร์ชัน
         self.install_task = None    # งานติดตั้งอัปเดต
         self._warned_units = False  # เตือนเรื่องหน่วยของช่องล็อกระยะแค่ครั้งเดียว
+        self._cad_visible_before = None  # สถานะแถบ CAD ก่อนที่ปลั๊กอินจะไปซ่อน
 
         self.layers = LineToolLayers(iface, self)
         self.layers.layersChanged.connect(self._sync_layer_state)
@@ -246,15 +247,10 @@ class LineToolDock(QgsDockWidget):
         angle_row.addWidget(self.spin_angle)
         kv.addLayout(angle_row)
 
-        # เปิด/ปิดแถบ "ดิจิไทซ์ขั้นสูง" ของ QGIS แบบเห็นหน้าตาแถบจริง
-        self.chk_cad = QCheckBox("แสดงแถบดิจิไทซ์ขั้นสูงของ QGIS")
-        self.chk_cad.setToolTip(
-            "ปกติปิดไว้ได้เลย — ล็อกระยะ/มุมด้านบนทำงานได้โดยไม่ต้องมีแถบนี้บนจอ\n"
-            "ติ๊กเมื่ออยากเห็นแถบจริงของ QGIS เพื่อกรอกค่าเองแบบละเอียด:\n"
-            "• ช่อง a = มุม (พิมพ์เองได้ เช่น 30, 45, 90) แล้วกดแม่กุญแจเพื่อล็อก\n"
-            "• ช่อง d = ระยะ (พิมพ์ความยาวเป๊ะ ๆ ได้)")
-        self.chk_cad.toggled.connect(self.on_toggle_cad)
-        kv.addWidget(self.chk_cad)
+        hint = QLabel("ระบบล็อกทำงานเบื้องหลัง — แถบดิจิไทซ์ขั้นสูงของ QGIS จะไม่โผล่ขึ้นมากวน")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 9pt; font-weight: normal; color: #6c757d;")
+        kv.addWidget(hint)
         root.addWidget(lock_group)
 
         # ดักปุ่ม Shift บน canvas (ติดตั้งครั้งเดียว ถอดตอน unload)
@@ -334,10 +330,10 @@ class LineToolDock(QgsDockWidget):
         # เครื่องมือ Add Feature มาตรฐาน: คลิกซ้ายลงจุด, คลิกขวาจบเส้น (ฟรี)
         self.iface.actionAddFeature().trigger()
 
-        # ต้องตั้งค่า CAD หลัง trigger เสมอ เพราะ CAD ผูกกับ map tool ที่กำลังใช้งาน
-        # (สลับเครื่องมือแล้ว QGIS อาจเด้งแถบขึ้นมาเอง — บังคับกลับตามที่ผู้ใช้ตั้งไว้)
+        # ต้องซ่อนแถบ CAD หลัง trigger เสมอ เพราะ CAD ผูกกับ map tool ที่กำลังใช้งาน
+        # — สลับเครื่องมือทีไร QGIS เด้งแถบขึ้นมาเองทุกที
         try:
-            self._set_cad_visible(self.chk_cad.isChecked())
+            self._hide_cad_bar()
         except Exception:  # noqa: BLE001
             pass
         if self.chk_dist_lock.isChecked():
@@ -403,26 +399,31 @@ class LineToolDock(QgsDockWidget):
             action.trigger()
         return cad.cadEnabled() == enabled
 
-    def _set_cad_visible(self, visible):
-        """แสดง/ซ่อน "แถบ" ดิจิไทซ์ขั้นสูงบนจอ (ไม่แตะสถานะเปิด/ปิดของระบบ)"""
+    def _hide_cad_bar(self):
+        """ซ่อน "แถบ" ดิจิไทซ์ขั้นสูงบนจอ (ไม่แตะสถานะเปิด/ปิดของระบบ)
+
+        ปลั๊กอินนี้มีช่องล็อกระยะ/มุมของตัวเองแล้ว จึงไม่ต้องให้แถบของ QGIS
+        มาโผล่กินพื้นที่จอ — จำสถานะเดิมไว้คืนให้ตอน unload ปลั๊กอิน
+        """
         cad = self.iface.cadDockWidget()
         if cad is None:
             return False
-        cad.setVisible(bool(visible))
+        if self._cad_visible_before is None:
+            self._cad_visible_before = cad.isVisible()
+        cad.setVisible(False)
         return True
 
     def _ensure_cad_enabled(self):
         """เปิดระบบ CAD ถ้ายังปิดอยู่ — constraint ไม่มีผลเลยถ้าระบบไม่เปิด
 
-        เปิดแล้วบังคับสถานะการ "แสดงแถบ" กลับไปตามที่ผู้ใช้ตั้งไว้เสมอ
-        เพราะการเปิดระบบอาจทำให้ QGIS เด้งแถบขึ้นมาเอง
+        เปิดแล้วซ่อนแถบทันที เพราะการเปิดระบบทำให้ QGIS เด้งแถบขึ้นมาเอง
         """
         cad = self.iface.cadDockWidget()
         if cad is None:
             return None
         if not cad.cadEnabled():
             self._set_cad_enabled(True)
-        self._set_cad_visible(self.chk_cad.isChecked())
+        self._hide_cad_bar()
         return cad
 
     def apply_distance_lock(self, locked):
@@ -516,18 +517,14 @@ class LineToolDock(QgsDockWidget):
         if mode is not None:
             constraint.setLockMode(mode)
 
-    def on_toggle_cad(self, checked):
-        """ผู้ใช้กดแสดง/ซ่อนแถบดิจิไทซ์ขั้นสูงของ QGIS
-
-        ซ่อนแถบไม่ได้ทำให้ล็อกระยะ/มุมหยุดทำงาน — ระบบยังเปิดอยู่เบื้องหลัง
-        """
-        try:
-            ok = self._set_cad_visible(checked)
-        except Exception:  # noqa: BLE001
-            ok = False
-        if not ok and checked:
-            self._warn("เปิดแถบดิจิไทซ์ขั้นสูงไม่สำเร็จ — เปิดเองได้ที่เมนู "
-                       "มุมมอง > แผงหน้าต่าง > ดิจิไทซ์ขั้นสูง")
+    def _restore_cad_bar(self):
+        """คืนสถานะแถบ CAD ให้เหมือนก่อนเปิดปลั๊กอิน (เรียกตอน unload)"""
+        if self._cad_visible_before is None:
+            return
+        cad = self.iface.cadDockWidget()
+        if cad is not None:
+            cad.setVisible(self._cad_visible_before)
+        self._cad_visible_before = None
 
     # ==================================================================
     # ตรวจสอบ / อัปเดตปลั๊กอิน
@@ -646,6 +643,12 @@ class LineToolDock(QgsDockWidget):
             except Exception:  # noqa: BLE001
                 pass
             self._shift_filter = None
+
+        # คืนแถบ CAD ให้เหมือนเดิม — ปลั๊กอินไปซ่อนไว้ ไม่ควรทิ้งค้างไว้แบบนั้น
+        try:
+            self._restore_cad_bar()
+        except Exception:  # noqa: BLE001
+            pass
 
         try:
             self.layers.cleanup()
