@@ -16,6 +16,7 @@ import os
 
 from qgis.PyQt.QtCore import QEvent, QObject, Qt
 from qgis.PyQt.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QDoubleSpinBox,
     QFrame,
@@ -24,13 +25,19 @@ from qgis.PyQt.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 from qgis.core import (
     Qgis,
     QgsApplication,
+    QgsCoordinateTransform,
+    QgsGeometry,
+    QgsMapLayerProxyModel,
     QgsProject,
+    QgsRectangle,
     QgsSnappingConfig,
     QgsTolerance,
     QgsUnitTypes,
@@ -38,10 +45,15 @@ from qgis.core import (
 from qgis.gui import (
     QgsAdvancedDigitizingDockWidget,
     QgsDockWidget,
+    QgsMapLayerComboBox,
 )
 
 from .line_tools import LineToolLayers
+from .guide_tools import GuideLineTool
 from . import update_checker
+
+#: role เก็บพิกัดจุดผลตรวจไว้กับแถวในตาราง (ใช้ตอนดับเบิลคลิกเพื่อซูม)
+POINT_ROLE = Qt.UserRole + 1
 
 PLUGIN_DIR = os.path.dirname(__file__)
 
@@ -67,6 +79,10 @@ BTN_RED = _BTN_BASE.format(bg="#dc3545", hover="#e15361", pressed="#bd2130")
 BTN_BLUE = _BTN_BASE.format(bg="#007bff", hover="#268fff", pressed="#0062cc")
 # ปุ่ม "สร้าง Layer เส้น" — สีเขียว (Bootstrap success)
 BTN_GREEN = _BTN_BASE.format(bg="#28a745", hover="#34ce57", pressed="#1e7e34")
+# ปุ่ม "ล้างแนว/ล้างผล" — สีเทา (Bootstrap secondary)
+BTN_GRAY = _BTN_BASE.format(bg="#6c757d", hover="#828a91", pressed="#5a6268")
+# ปุ่ม "ขึงแนว" — ฟ้าอมเขียว (Bootstrap info) ให้ต่างจากปุ่มวาดเส้น
+BTN_CYAN = _BTN_BASE.format(bg="#17a2b8", hover="#1fc8e3", pressed="#117a8b")
 
 # สไตล์รวมของหน้าต่าง — โทน/ขนาดฟอนต์อ้างอิงตาม Filter_PATH (Bootstrap)
 DOCK_QSS = """
@@ -149,6 +165,8 @@ class LineToolDock(QgsDockWidget):
 
         self.layers = LineToolLayers(iface, self)
         self.layers.layersChanged.connect(self._sync_layer_state)
+        self.guide = GuideLineTool(iface, self)
+        self.guide.guideChanged.connect(self._sync_guide_state)
 
         self._build_ui()
 
@@ -269,7 +287,94 @@ class LineToolDock(QgsDockWidget):
             " border-radius: 4px; padding: 7px 9px;")
         root.addWidget(self.status_label)
 
-        root.addStretch(1)
+        # ---- กลุ่ม: ขึงแนวตรึง ----
+        guide_group = QGroupBox("ขึงแนวตรึง (ตรวจแนวโพลิกอน)")
+        gv = QVBoxLayout(guide_group)
+        gv.setSpacing(8)
+
+        guide_btn_row = QHBoxLayout()
+        guide_btn_row.setSpacing(8)
+        self.btn_guide = QPushButton("✎ ขึงแนว (คลิก 2 จุด)")
+        self.btn_guide.setStyleSheet(BTN_CYAN)
+        self.btn_guide.setCursor(Qt.PointingHandCursor)
+        self.btn_guide.setToolTip(
+            "คลิก 2 จุดบนแผนที่เพื่อกำหนดแนว แล้วคลิกขวาจบ\n"
+            "แนวจะถูกยืดออกทั้งสองด้านให้พาดข้ามจอ (เหมือนขึงเชือกตรึงแนว)\n"
+            "snap เข้าหมุด/มุมแปลงได้ — ขึงใหม่ทับแนวเดิมได้เลย")
+        self.btn_guide.clicked.connect(self.on_draw_guide)
+        self.btn_guide_clear = QPushButton("ล้างแนว")
+        self.btn_guide_clear.setStyleSheet(BTN_GRAY)
+        self.btn_guide_clear.setCursor(Qt.PointingHandCursor)
+        self.btn_guide_clear.clicked.connect(self.on_clear_guide)
+        guide_btn_row.addWidget(self.btn_guide, 2)
+        guide_btn_row.addWidget(self.btn_guide_clear, 1)
+        gv.addLayout(guide_btn_row)
+
+        poly_row = QHBoxLayout()
+        poly_row.setSpacing(8)
+        poly_row.addWidget(QLabel("ตรวจกับชั้น:"))
+        self.poly_combo = QgsMapLayerComboBox()
+        self.poly_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.poly_combo.setAllowEmptyLayer(True)
+        self.poly_combo.setToolTip("ชั้น POLYGON ที่จะเอา vertex มาเทียบกับแนว")
+        poly_row.addWidget(self.poly_combo, 1)
+        gv.addLayout(poly_row)
+
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        search_row.addWidget(QLabel("ระยะค้นหารอบแนว:"), 1)
+        self.spin_search = QDoubleSpinBox()
+        self.spin_search.setRange(0.01, 10000.0)
+        self.spin_search.setDecimals(3)
+        self.spin_search.setValue(2.0)
+        self.spin_search.setSuffix(" ม.")
+        self.spin_search.setFixedWidth(120)
+        self.spin_search.setToolTip(
+            "สนใจเฉพาะ vertex ที่ห่างจากแนวไม่เกินค่านี้\n"
+            "ไกลกว่านี้ถือว่าเป็นคนละแนว ไม่ใช่ความผิดพลาด")
+        search_row.addWidget(self.spin_search)
+        gv.addLayout(search_row)
+
+        tol_row = QHBoxLayout()
+        tol_row.setSpacing(8)
+        tol_row.addWidget(QLabel("ยอมรับเยื้องได้:"), 1)
+        self.spin_tol = QDoubleSpinBox()
+        self.spin_tol.setRange(0.001, 1000.0)
+        self.spin_tol.setDecimals(3)
+        self.spin_tol.setSingleStep(0.01)
+        self.spin_tol.setValue(0.020)
+        self.spin_tol.setSuffix(" ม.")
+        self.spin_tol.setFixedWidth(120)
+        self.spin_tol.setToolTip("เยื้องไม่เกินค่านี้ถือว่ายังอยู่ในแนว — เกินกว่านี้จึงรายงาน")
+        tol_row.addWidget(self.spin_tol)
+        gv.addLayout(tol_row)
+
+        self.btn_check_guide = QPushButton("▶ ตรวจแนว")
+        self.btn_check_guide.setStyleSheet(BTN_BLUE)
+        self.btn_check_guide.setCursor(Qt.PointingHandCursor)
+        self.btn_check_guide.setEnabled(False)
+        self.btn_check_guide.clicked.connect(self.on_check_guide)
+        gv.addWidget(self.btn_check_guide)
+
+        self.guide_summary = QLabel("ยังไม่ได้ขึงแนว")
+        self.guide_summary.setWordWrap(True)
+        self.guide_summary.setStyleSheet(
+            "font-size: 10pt; font-weight: bold; color: #495057;"
+            " background-color: #eef4ff; border: 1px solid #cfe2ff;"
+            " border-radius: 4px; padding: 7px 9px;")
+        gv.addWidget(self.guide_summary)
+
+        self.guide_table = QTableWidget(0, 3)
+        self.guide_table.setHorizontalHeaderLabels(["FID", "เยื้อง (ม.)", "ทิศ"])
+        self.guide_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.guide_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.guide_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.guide_table.horizontalHeader().setStretchLastSection(True)
+        self.guide_table.setMinimumHeight(120)
+        self.guide_table.setToolTip("ดับเบิลคลิกที่แถวเพื่อซูมไปยังจุดที่เยื้องออกนอกแนว")
+        self.guide_table.cellDoubleClicked.connect(self.on_guide_row_double_clicked)
+        gv.addWidget(self.guide_table, 1)
+        root.addWidget(guide_group, 1)
 
         # ---- เส้นคั่น + ส่วนอัปเดต ----
         line = QFrame()
@@ -368,6 +473,119 @@ class LineToolDock(QgsDockWidget):
         else:
             self.status_label.setText(
                 "ยังไม่ได้สร้าง Layer เส้น — กด 'สร้าง Layer เส้น' เพื่อเริ่ม")
+
+    # ==================================================================
+    # ขึงแนวตรึง
+    # ==================================================================
+    def on_draw_guide(self):
+        """เริ่มขึงแนว: สร้างชั้นแนว + เข้าโหมดวาด (คลิก 2 จุด แล้วคลิกขวาจบ)"""
+        layer = self.guide.ensure_guide_layer()
+        if layer is None:
+            self._warn("สร้างชั้นแนวตรึงไม่สำเร็จ")
+            return
+
+        try:
+            self._enable_vertex_snapping()
+        except Exception:  # noqa: BLE001
+            pass
+        self.iface.setActiveLayer(layer)
+        if not layer.isEditable():
+            layer.startEditing()
+        self.iface.actionAddFeature().trigger()
+        try:
+            self._hide_cad_bar()
+        except Exception:  # noqa: BLE001
+            pass
+
+        self.guide_summary.setText("คลิก 2 จุดเพื่อกำหนดแนว แล้วคลิกขวาเพื่อจบ")
+
+    def on_clear_guide(self):
+        self.guide.clear_guide()
+        self.guide_table.setRowCount(0)
+        self.guide_summary.setText("ล้างแนวแล้ว")
+
+    def _sync_guide_state(self):
+        """ปรับปุ่ม/ข้อความให้ตรงกับว่ามีแนวที่ขึงไว้จริงหรือยัง"""
+        has_guide = self.guide.has_guide()
+        self.btn_check_guide.setEnabled(has_guide)
+        if has_guide:
+            self.guide_table.setRowCount(0)
+            self.guide_summary.setText("ขึงแนวแล้ว — เลือกชั้น POLYGON แล้วกด '▶ ตรวจแนว'")
+        else:
+            self.guide_summary.setText("ยังไม่ได้ขึงแนว")
+
+    def on_check_guide(self):
+        polygon_layer = self.poly_combo.currentLayer()
+        results, error = self.guide.run_check(
+            polygon_layer, float(self.spin_search.value()), float(self.spin_tol.value()))
+        if error:
+            self._warn(error)
+            return
+
+        self._populate_guide_table(results)
+        if results:
+            worst = results[0]
+            self.guide_summary.setText(
+                "พบจุดเยื้องนอกแนว {} จุด — มากสุด {:+.3f} ม. ({})".format(
+                    len(results), worst["offset"], worst["side"]))
+            self.iface.messageBar().pushMessage(
+                "ตรวจแนวเสร็จ",
+                "พบ {} จุดที่เยื้องเกิน {:.3f} ม. — ดับเบิลคลิกที่แถวเพื่อซูม".format(
+                    len(results), self.spin_tol.value()),
+                level=Qgis.Warning, duration=6)
+        else:
+            self.guide_summary.setText(
+                "ทุก vertex ในระยะค้นหาอยู่ในแนว (ไม่เกิน {:.3f} ม.) ✔".format(
+                    self.spin_tol.value()))
+            self.iface.messageBar().pushMessage(
+                "ตรวจแนวเสร็จ", "โพลิกอนตรงแนวทั้งหมด ✔", level=Qgis.Success, duration=5)
+
+    def _populate_guide_table(self, results):
+        self.guide_table.setRowCount(0)
+        for item in results:
+            row = self.guide_table.rowCount()
+            self.guide_table.insertRow(row)
+
+            fid_item = QTableWidgetItem(str(item["fid"]))
+            # เก็บพิกัดไว้กับแถว เพื่อซูมตอนดับเบิลคลิก
+            fid_item.setData(POINT_ROLE, item["point"])
+            self.guide_table.setItem(row, 0, fid_item)
+            self.guide_table.setItem(row, 1, QTableWidgetItem("{:+.3f}".format(item["offset"])))
+            self.guide_table.setItem(row, 2, QTableWidgetItem(item["side"]))
+        self.guide_table.resizeColumnsToContents()
+        self.guide_table.horizontalHeader().setStretchLastSection(True)
+
+    def on_guide_row_double_clicked(self, row, _column):
+        """ซูมไปยังจุดที่เยื้อง + กะพริบให้เห็นตำแหน่ง"""
+        fid_item = self.guide_table.item(row, 0)
+        if fid_item is None:
+            return
+        point = fid_item.data(POINT_ROLE)
+        guide_layer = self.guide.guide_layer()
+        if point is None or guide_layer is None:
+            return
+
+        src_crs = guide_layer.crs()
+        canvas = self.iface.mapCanvas()
+        dest_crs = canvas.mapSettings().destinationCrs()
+
+        display = QgsGeometry.fromPointXY(point)
+        if src_crs != dest_crs:
+            try:
+                display.transform(
+                    QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance()))
+            except Exception:  # noqa: BLE001
+                return
+
+        centre = display.asPoint()
+        margin = max(canvas.extent().width() * 0.03, 1e-6)
+        canvas.setExtent(QgsRectangle(centre.x() - margin, centre.y() - margin,
+                                      centre.x() + margin, centre.y() + margin))
+        canvas.refresh()
+        try:
+            canvas.flashGeometries([QgsGeometry.fromPointXY(point)], src_crs)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ==================================================================
     # ปุ่มเช็ก: label ระยะ / จุด Node
@@ -652,6 +870,10 @@ class LineToolDock(QgsDockWidget):
 
         try:
             self.layers.cleanup()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.guide.cleanup()
         except Exception:  # noqa: BLE001
             pass
 
