@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-คลาสหลักของปลั๊กอิน: สร้างเมนู/ทูลบาร์ และเปิดหน้าต่าง (dock) เครื่องมือวาดเส้น
+คลาสหลักของปลั๊กอิน: สร้างเมนู/ทูลบาร์ และเปิดหน้าต่างเครื่องมือวาดเส้น
+
+หน้าต่างเป็น "หน้าต่างลอย" แบบ Windows (QDialog) ไม่ใช่แผงติดขอบจอ
+จึงลากย้ายไปวางตรงไหนก็ได้ ย่อ/ขยายได้ และไม่บล็อกการใช้งาน QGIS
 
 ผู้พัฒนา : นายภาคภูมิ สูบกำปัง
 ตำแหน่ง  : วิศวกรรังวัดปฏิบัติการ
@@ -9,11 +12,10 @@
 
 import os
 
-from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
-from .line_dock import LineToolDock
+from .line_dock import LineToolWindow
 
 PLUGIN_DIR = os.path.dirname(__file__)
 PLUGIN_NAME = "Line Draw & Measure"
@@ -52,7 +54,7 @@ class LineDrawMeasurePlugin:
     def __init__(self, iface):
         self.iface = iface
         self.actions = []
-        self.dock = None
+        self.window = None
         self._menu_added = False
 
     # ------------------------------------------------------------------
@@ -72,33 +74,33 @@ class LineDrawMeasurePlugin:
         self._menu_added = True
 
     def unload(self):
-        """ถอดปลั๊กอิน: ลบเมนู/ทูลบาร์ และปิด dock"""
+        """ถอดปลั๊กอิน: ลบเมนู/ทูลบาร์ และปิดหน้าต่าง"""
         for action in self.actions:
             self.iface.removePluginVectorMenu(MENU_TITLE, action)
             self.iface.removeToolBarIcon(action)
         self.actions = []
 
-        if self.dock is not None:
+        if self.window is not None:
             try:
-                self.dock.cleanup()
+                self.window.cleanup()
             except Exception:  # noqa: BLE001 - ป้องกัน unload พังตอนปิด QGIS
                 pass
-            self.iface.removeDockWidget(self.dock)
-            self.dock.deleteLater()
-            self.dock = None
+            self.window.close()
+            self.window.deleteLater()
+            self.window = None
 
     # ------------------------------------------------------------------
     # การทำงาน
     # ------------------------------------------------------------------
     def run(self):
-        """เปิด/แสดงหน้าต่างเครื่องมือวาดเส้น"""
-        if self.dock is None:
-            self.dock = LineToolDock(self.iface)
-            self.dock.destroyed.connect(self._on_dock_destroyed)
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+        """เปิด/แสดงหน้าต่างเครื่องมือวาดเส้น (หน้าต่างลอย ไม่บล็อก QGIS)"""
+        if self.window is None:
+            self.window = LineToolWindow(self.iface)
+            self.window.destroyed.connect(self._on_window_destroyed)
 
-        self.dock.show()
-        self.dock.raise_()
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
 
-    def _on_dock_destroyed(self, *args):
-        self.dock = None
+    def _on_window_destroyed(self, *args):
+        self.window = None
