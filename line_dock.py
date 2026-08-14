@@ -247,12 +247,12 @@ class LineToolDock(QgsDockWidget):
         kv.addLayout(angle_row)
 
         # เปิด/ปิดแถบ "ดิจิไทซ์ขั้นสูง" ของ QGIS แบบเห็นหน้าตาแถบจริง
-        self.chk_cad = QCheckBox("เปิดแถบดิจิไทซ์ขั้นสูงของ QGIS")
+        self.chk_cad = QCheckBox("แสดงแถบดิจิไทซ์ขั้นสูงของ QGIS")
         self.chk_cad.setToolTip(
-            "เปิดแถบ 'ดิจิไทซ์ขั้นสูง' ของ QGIS ขึ้นมาให้เห็น\n"
+            "ปกติปิดไว้ได้เลย — ล็อกระยะ/มุมด้านบนทำงานได้โดยไม่ต้องมีแถบนี้บนจอ\n"
+            "ติ๊กเมื่ออยากเห็นแถบจริงของ QGIS เพื่อกรอกค่าเองแบบละเอียด:\n"
             "• ช่อง a = มุม (พิมพ์เองได้ เช่น 30, 45, 90) แล้วกดแม่กุญแจเพื่อล็อก\n"
-            "• ช่อง d = ระยะ (พิมพ์ความยาวเป๊ะ ๆ ได้)\n"
-            "ปกติไม่ต้องเปิดเองก็ได้ — ช่องล็อกระยะ/มุมด้านบนสั่งแถบนี้ให้อยู่แล้ว")
+            "• ช่อง d = ระยะ (พิมพ์ความยาวเป๊ะ ๆ ได้)")
         self.chk_cad.toggled.connect(self.on_toggle_cad)
         kv.addWidget(self.chk_cad)
         root.addWidget(lock_group)
@@ -335,11 +335,11 @@ class LineToolDock(QgsDockWidget):
         self.iface.actionAddFeature().trigger()
 
         # ต้องตั้งค่า CAD หลัง trigger เสมอ เพราะ CAD ผูกกับ map tool ที่กำลังใช้งาน
-        if self.chk_cad.isChecked():
-            try:
-                self._apply_cad(True)
-            except Exception:  # noqa: BLE001
-                pass
+        # (สลับเครื่องมือแล้ว QGIS อาจเด้งแถบขึ้นมาเอง — บังคับกลับตามที่ผู้ใช้ตั้งไว้)
+        try:
+            self._set_cad_visible(self.chk_cad.isChecked())
+        except Exception:  # noqa: BLE001
+            pass
         if self.chk_dist_lock.isChecked():
             self.apply_distance_lock(True)
 
@@ -385,8 +385,12 @@ class LineToolDock(QgsDockWidget):
     # ==================================================================
     # ล็อกระยะ / ล็อกมุม (ระบบดิจิไทซ์ขั้นสูงของ QGIS)
     # ==================================================================
-    def _apply_cad(self, enabled):
-        """เปิด/ปิดแถบดิจิไทซ์ขั้นสูงของ QGIS (ล็อกมุม/ระยะ)
+    # "ระบบ" ดิจิไทซ์ขั้นสูง กับ "แถบ" ที่เห็นบนจอ เป็นคนละเรื่องกัน:
+    #   • cadEnabled()  = ระบบล็อกมุม/ระยะทำงานอยู่ไหม  → จำเป็นต้องเปิด ไม่งั้น constraint ไม่มีผล
+    #   • setVisible()  = แถบโผล่บนจอไหม               → เรื่องหน้าตาล้วน ๆ ไม่กระทบการล็อก
+    # แยกสองอย่างนี้ออกจากกัน ผู้ใช้จึงล็อกระยะ/มุมได้โดยไม่ต้องมีแถบ CAD เกะกะจอ
+    def _set_cad_enabled(self, enabled):
+        """เปิด/ปิด "ระบบ" ดิจิไทซ์ขั้นสูง
 
         ใช้ enableAction() ซึ่งเป็นปุ่มสลับ "เปิดเครื่องมือดิจิไทซ์ขั้นสูง" ของ QGIS เอง
         จึงได้พฤติกรรมตรงกับที่ผู้ใช้กดเองในโปรแกรม
@@ -397,19 +401,28 @@ class LineToolDock(QgsDockWidget):
         action = cad.enableAction()
         if action is not None and action.isEnabled() and action.isChecked() != enabled:
             action.trigger()
-        cad.setVisible(enabled)
+        return cad.cadEnabled() == enabled
+
+    def _set_cad_visible(self, visible):
+        """แสดง/ซ่อน "แถบ" ดิจิไทซ์ขั้นสูงบนจอ (ไม่แตะสถานะเปิด/ปิดของระบบ)"""
+        cad = self.iface.cadDockWidget()
+        if cad is None:
+            return False
+        cad.setVisible(bool(visible))
         return True
 
     def _ensure_cad_enabled(self):
-        """เปิด CAD ถ้ายังปิดอยู่ — constraint ไม่มีผลเลยถ้า CAD ไม่เปิด"""
+        """เปิดระบบ CAD ถ้ายังปิดอยู่ — constraint ไม่มีผลเลยถ้าระบบไม่เปิด
+
+        เปิดแล้วบังคับสถานะการ "แสดงแถบ" กลับไปตามที่ผู้ใช้ตั้งไว้เสมอ
+        เพราะการเปิดระบบอาจทำให้ QGIS เด้งแถบขึ้นมาเอง
+        """
         cad = self.iface.cadDockWidget()
         if cad is None:
             return None
         if not cad.cadEnabled():
-            self._apply_cad(True)
-            self.chk_cad.blockSignals(True)
-            self.chk_cad.setChecked(True)
-            self.chk_cad.blockSignals(False)
+            self._set_cad_enabled(True)
+        self._set_cad_visible(self.chk_cad.isChecked())
         return cad
 
     def apply_distance_lock(self, locked):
@@ -504,9 +517,12 @@ class LineToolDock(QgsDockWidget):
             constraint.setLockMode(mode)
 
     def on_toggle_cad(self, checked):
-        """ผู้ใช้กดเปิด/ปิดช่อง 'เปิดแถบดิจิไทซ์ขั้นสูงของ QGIS'"""
+        """ผู้ใช้กดแสดง/ซ่อนแถบดิจิไทซ์ขั้นสูงของ QGIS
+
+        ซ่อนแถบไม่ได้ทำให้ล็อกระยะ/มุมหยุดทำงาน — ระบบยังเปิดอยู่เบื้องหลัง
+        """
         try:
-            ok = self._apply_cad(checked)
+            ok = self._set_cad_visible(checked)
         except Exception:  # noqa: BLE001
             ok = False
         if not ok and checked:
